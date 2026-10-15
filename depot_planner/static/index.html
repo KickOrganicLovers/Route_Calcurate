@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>補給地点シミュレーター</title>
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.12.0/mapbox-gl.css" rel="stylesheet">
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.12.0/mapbox-gl.js"></script>
+<link href="/static/style.css?v=0.2.0" rel="stylesheet">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">補給地点シミュレーター</div>
+  <div class="scenario-bar">
+    <select id="scenario-select" aria-label="保存済みシナリオ"></select>
+    <button id="btn-new" class="ghost" title="新しいシナリオ">新規</button>
+    <button id="btn-save" class="ghost" title="上書き保存 (Ctrl+S)">保存</button>
+    <button id="btn-save-as" class="ghost">名前を付けて保存</button>
+    <span id="dirty-mark" class="dirty" hidden>● 未保存</span>
+  </div>
+  <div class="run-bar">
+    <div id="run-progress" class="progress" hidden>
+      <div class="progress-track"><div id="run-progress-fill" class="progress-fill"></div></div>
+      <span id="run-progress-text"></span>
+      <button id="btn-cancel" class="ghost small">中止</button>
+    </div>
+    <button id="btn-run" class="primary">シミュレーション実行</button>
+  </div>
+</header>
+
+<main class="layout">
+  <aside class="sidebar">
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-tab="targets" class="active">目的地 <span id="count-targets" class="count">0</span></button>
+      <button role="tab" data-tab="candidates">補給地点 <span id="count-candidates" class="count">0</span></button>
+      <button role="tab" data-tab="params">条件</button>
+      <button role="tab" data-tab="results">結果</button>
+    </nav>
+
+    <!-- 目的地 -->
+    <section class="panel" data-panel="targets">
+      <div class="search" data-kind="targets"></div>
+      <p class="hint">検索して選ぶか、地図をクリックして追加。マーカーはドラッグで位置を調整できます。</p>
+      <div class="list-tools">
+        <button class="ghost small" data-action="fit">全体を表示</button>
+        <button class="ghost small" data-action="import" data-kind="targets">CSV 取り込み</button>
+        <button class="ghost small danger" data-action="clear" data-kind="targets">全削除</button>
+      </div>
+      <ol id="list-targets" class="plist"></ol>
+    </section>
+
+    <!-- 補給地点 -->
+    <section class="panel" data-panel="candidates" hidden>
+      <div class="search" data-kind="candidates"></div>
+      <p class="hint">状態: <b>候補</b>=選定対象 / <b>必須</b>=必ず採用 / <b>除外</b>=選定しない。区分は報告書の色分けに使います。</p>
+      <div class="list-tools">
+        <button class="ghost small" data-action="fit">全体を表示</button>
+        <button class="ghost small" data-action="import" data-kind="candidates">CSV 取り込み</button>
+        <button class="ghost small danger" data-action="clear" data-kind="candidates">全削除</button>
+      </div>
+      <ol id="list-candidates" class="plist"></ol>
+      <datalist id="group-options"></datalist>
+    </section>
+
+    <!-- 条件 -->
+    <section class="panel" data-panel="params" hidden>
+      <form id="params-form" class="form" autocomplete="off">
+        <fieldset>
+          <legend>シナリオ</legend>
+          <label>名前 <input name="name" required></label>
+          <label>説明 <textarea name="description" rows="2"></textarea></label>
+        </fieldset>
+        <fieldset>
+          <legend>選定</legend>
+          <label>採用する補給地点の数 <input name="num_depots" type="number" min="1" step="1" required></label>
+          <label>目的関数
+            <select name="objective">
+              <option value="makespan">最も遅い車両の所要時間を最小化</option>
+              <option value="total">全車両の総所要時間を最小化</option>
+            </select>
+          </label>
+          <div class="row2">
+            <label>作業時間（分） <input name="service_min" type="number" min="0" step="0.5"></label>
+            <label>積込時間（分） <input name="reload_min" type="number" min="0" step="0.5"></label>
+          </div>
+          <p class="hint">選定では、各目的地へ補給地点から直行する前提（積込 + 移動 + 作業）で評価し、各拠点に置く機材の数を決めます。</p>
+        </fieldset>
+        <fieldset>
+          <legend>ルート最適化</legend>
+          <label class="check"><input name="rt_enabled" type="checkbox"> 選定後に車両ごとの順路も計算する</label>
+          <div class="row2">
+            <label>1 台に積める機材の数 <input name="rt_capacity" type="number" min="1" step="1"></label>
+            <label>1 台の配送上限 <input name="rt_max_deliveries" type="number" min="1" step="1" placeholder="積載量と同じ"></label>
+          </div>
+          <label>探索時間（秒） <input name="rt_time_limit" type="number" min="1" max="3600" step="1"></label>
+          <p class="hint">各拠点の機材を 1 回で積み切れる台数の車両が待機します。配送上限を積載量より大きくすると、補給地点へ戻って積み直す往復も許します。</p>
+        </fieldset>
+        <fieldset>
+          <legend>移動時間</legend>
+          <label>移動手段
+            <select name="profile">
+              <option value="driving">自動車</option>
+              <option value="driving-traffic">自動車（交通状況考慮）</option>
+              <option value="walking">徒歩</option>
+              <option value="cycling">自転車</option>
+            </select>
+          </label>
+          <label>取得元
+            <select name="provider">
+              <option value="mapbox">Mapbox Matrix API</option>
+              <option value="auto">Mapbox → 失敗時 OSRM</option>
+              <option value="osrm">OSRM デモサーバ（自動車のみ）</option>
+            </select>
+          </label>
+        </fieldset>
+        <fieldset>
+          <legend>感度分析</legend>
+          <label class="check"><input name="sens_enabled" type="checkbox"> 採用数を変えた場合も計算する</label>
+          <div class="row2">
+            <label>最小 <input name="sens_min" type="number" min="1" step="1"></label>
+            <label>最大 <input name="sens_max" type="number" min="1" step="1"></label>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>詳細</legend>
+          <label>厳密解を求める組合せ数の上限 <input name="max_exact_combinations" type="number" min="1" step="1"></label>
+          <p class="hint">組合せ数がこれを超えると近似解（貪欲法＋入替え探索）に切り替えます。</p>
+        </fieldset>
+      </form>
+      <ul id="validation" class="validation"></ul>
+    </section>
+
+    <!-- 結果 -->
+    <section class="panel" data-panel="results" hidden>
+      <div id="results"><p class="empty">まだ実行していません。条件を確認して「シミュレーション実行」を押してください。</p></div>
+    </section>
+  </aside>
+
+  <div class="map-wrap">
+    <div id="map"></div>
+    <div class="map-legend" id="map-legend"></div>
+  </div>
+</main>
+
+<div id="modal-root"></div>
+<div id="toast" class="toast" hidden></div>
+<script src="/static/app.js?v=0.2.0"></script>
+</body>
+</html>
