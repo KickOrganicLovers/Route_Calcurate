@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+<Document>
+<Style id="PolyStyle1">
+  <IconStyle>
+  <Icon>
+  <href>https://maps.gsi.go.jp/portal/sys/v4/symbols/083.png</href>
+  </Icon>
+  <scale>1</scale>
+  </IconStyle>
+</Style>
+<Placemark>
+<description><![CDATA[ <table><tr><td>属性1</td><td>籠原用地</td></tr><tr><td>緯度</td><td>36.16545506</td></tr><tr><td>経度</td><td>139.3145099</td></tr></table> ]]></description>
+<styleUrl>#PolyStyle1</styleUrl>
+<Point>
+<coordinates>139.3145099,36.16545506</coordinates>
+</Point>
+</Placemark>
+<Placemark>
+<description><![CDATA[ <table><tr><td>属性1</td><td>熊谷熱調所</td></tr><tr><td>緯度</td><td>36.1368665</td></tr><tr><td>経度</td><td>139.3954662</td></tr></table> ]]></description>
+<styleUrl>#PolyStyle1</styleUrl>
+<Point>
+<coordinates>139.3954662,36.1368665</coordinates>
+</Point>
+</Placemark>
+<Placemark>
+<description><![CDATA[ <table><tr><td>属性1</td><td>熊谷ビル</td></tr><tr><td>緯度</td><td>36.14141397</td></tr><tr><td>経度</td><td>139.3947264</td></tr></table> ]]></description>
+<styleUrl>#PolyStyle1</styleUrl>
+<Point>
+<coordinates>139.3947264,36.14141397</coordinates>
+</Point>
+</Placemark>
+<Placemark>
+<description><![CDATA[ <table><tr><td>属性1</td><td>大宮ビル</td></tr><tr><td>緯度</td><td>35.9411381</td></tr><tr><td>経度</td><td>139.6129623</td></tr></table> ]]></description>
+<styleUrl>#PolyStyle1</styleUrl>
+<Point>
+<coordinates>139.6129623,35.9411381</coordinates>
+</Point>
+</Placemark>
+</Document>
+</kml>

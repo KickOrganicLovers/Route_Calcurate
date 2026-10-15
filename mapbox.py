@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-"""Mapbox 由来の移動時間ユーティリティ。
+"""Mapbox 由来の移動時間行列とそのキャッシュ。
 
 配送先・補給地点の座標間の「実測に基づく所要時間」を Mapbox Matrix API
-(directions-matrix) から取得し、(lat, lon) 2 点 -> 所要時間[分] を返す
-callable を生成する。
+(directions-matrix) から取得する。道路ネットワーク上の現実的な運転時間なので、
+直線距離の近似より実態に近い。
 
-これにより、従来の「球面距離 ÷ 速度」による直線近似を、道路ネットワーク上の
-現実的な運転時間へ置き換えられる。
+プロバイダの選択(Mapbox / OSRM)と callable の生成は travel_time.py が担う。
+このモジュールは Mapbox からの取得とキャッシュ入出力だけを持つ。
 
 依存は標準ライブラリのみ(urllib)。アクセストークンは .env の
 NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN から読む。
@@ -175,53 +175,3 @@ def _write_cache(cache_path, key, profile, points, matrix):
         }, f, ensure_ascii=False)
 
 
-def fetch_and_cache(targets, depots, profile="driving", token=None,
-                    cache_path=CACHE_PATH):
-    """API を叩いて所要時間行列を取得し、キャッシュへ書き出す(常に再取得)。
-
-    データ取得コマンド(fetch_data.py)から呼ぶ。戻り値は書き出した matrix。
-    """
-    points, _ = _collect_points(targets, depots)
-    key = _cache_key(points, profile)
-    matrix = build_duration_matrix(points, token=token, profile=profile)
-    _write_cache(cache_path, key, profile, points, matrix)
-    return matrix
-
-
-# ---------------------------------------------------------------------------
-# 配送先 + 補給地点から travel_time_min(a, b) callable を作る
-# ---------------------------------------------------------------------------
-def build_travel_time(targets, depots, profile="driving", token=None,
-                      cache_path=CACHE_PATH, max_age_sec=None,
-                      allow_fetch=True):
-    """targets / depots の座標から (lat,lon),(lat,lon) -> 分 の callable を返す。
-
-    キャッシュ優先。以下の順で行列を用意する。
-        1. cache_path に有効なキャッシュがあれば、それを使う。
-           (max_age_sec を指定すると、それより古いキャッシュは失効扱い)
-        2. なければ API から取得し、キャッシュへ書き出す(allow_fetch=True 時)。
-        3. allow_fetch=False でキャッシュが無い場合はエラー。
-
-    同一座標(複数在庫の pickup など)は 1 点に集約して行列を作るため、
-    未知座標が来た場合は大きな値を返す。
-    """
-    points, coord_index = _collect_points(targets, depots)
-    key = _cache_key(points, profile)
-
-    matrix = _read_cache(cache_path, key, max_age_sec)
-    if matrix is None:
-        if not allow_fetch:
-            raise RuntimeError(
-                f"有効なキャッシュ({cache_path})がありません。"
-                "先に fetch_data.py でデータ取得してください。")
-        matrix = build_duration_matrix(points, token=token, profile=profile)
-        _write_cache(cache_path, key, profile, points, matrix)
-
-    def travel_time_min(a, b):
-        i = coord_index.get((a[0], a[1]))
-        j = coord_index.get((b[0], b[1]))
-        if i is None or j is None:
-            return 1e9
-        return matrix[i][j]
-
-    return travel_time_min

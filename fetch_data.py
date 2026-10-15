@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Mapbox 所要時間データの取得・キャッシュコマンド。
+"""所要時間データの取得・キャッシュコマンド。
 
-配送先/補給地点の全対の運転時間を Mapbox Matrix API から取得し、
-cache/mapbox_matrix.json へ保存する。main.py / make_report.py は
-このキャッシュを参照して動くため、実行前に一度これを走らせておく。
+配送先/補給地点候補の全対の運転時間を Mapbox Matrix API(使えない場合は
+OSRM)から取得し、cache/mapbox_matrix.json へ保存する。main.py /
+make_report.py はこのキャッシュを参照して動くため、実行前に一度これを
+走らせておく。
 
 使い方:
     uv run fetch_data.py                # キャッシュが最新(同一地点)なら再取得しない
@@ -17,12 +18,13 @@ cache/mapbox_matrix.json へ保存する。main.py / make_report.py は
 import argparse
 import sys
 
-from mapbox import CACHE_PATH, fetch_and_cache, _read_cache, _cache_key, _collect_points
+from mapbox import _read_cache, _collect_points
+from travel_time import CACHE_PATH, fetch_and_cache, _cache_key
 from main import build_inputs
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Mapbox 所要時間データを取得しキャッシュする")
+    ap = argparse.ArgumentParser(description="所要時間データを取得しキャッシュする")
     ap.add_argument("--force", action="store_true",
                     help="キャッシュの有無に関わらず強制的に再取得する")
     ap.add_argument("--max-age", type=float, default=None, metavar="SEC",
@@ -41,13 +43,15 @@ def main():
     # 再取得が必要か判定(--force 指定時は無条件で取得)
     if not args.force:
         points, _ = _collect_points(targets, depots)
-        key = _cache_key(points, args.profile)
-        if _read_cache(CACHE_PATH, key, args.max_age) is not None:
-            print(f"キャッシュは有効です(再取得しません): {CACHE_PATH}")
-            print("強制的に更新するには --force を付けてください。")
-            return
+        for provider in ("mapbox", "osrm"):
+            key = _cache_key(points, args.profile, provider)
+            if _read_cache(CACHE_PATH, key, args.max_age) is not None:
+                print(f"キャッシュは有効です(再取得しません): {CACHE_PATH} "
+                      f"[取得元: {provider}]")
+                print("強制的に更新するには --force を付けてください。")
+                return
 
-    print(f"Mapbox から所要時間を取得中(profile={args.profile}) ...")
+    print(f"所要時間を取得中(profile={args.profile}) ...")
     matrix = fetch_and_cache(targets, depots, profile=args.profile)
     print(f"取得完了: {len(matrix)}x{len(matrix)} 地点 -> {CACHE_PATH} に保存しました。")
 
