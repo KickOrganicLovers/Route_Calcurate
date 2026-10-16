@@ -28,7 +28,7 @@ uv run depot-planner gui          # http://127.0.0.1:8765/ がブラウザで開
   地図をクリックしてその地点を追加することもできる。マーカーはドラッグで位置を微調整できる。
   補給地点には「区分」（報告書の色分け）と「状態」（候補 / 必須 / 除外）とメモを付けられる。
 - **条件タブ**: 採用数、作業時間・積込時間、移動手段、目的関数、感度分析の範囲、
-  **ルート最適化（1 台に積める機材の数・1 台の配送上限・探索時間）**。
+  **ルート最適化（1 台に積める機材の数・1 台の配送上限・車両の総数・探索時間）**。
 - **結果タブ**: 最長所要時間、採用拠点と機材数・車両台数、**車両ごとの順路**（行を押すと地図でその車両を強調）、
   採用数ごとの最長所要時間のグラフ、目的地ごとの担当。Word 報告書 / CSV / JSON をダウンロードできる。
   地図には車両ごとの順路を立ち寄り順に直線で描く（道路の形ではない）。
@@ -41,6 +41,7 @@ uv run depot-planner list                                   # 保存済みシナ
 uv run depot-planner run saitama_all33                      # 実行 → runs/<日時_名前>/ に保存
 uv run depot-planner run saitama_all33 --capacity 3         # 1 台に機材 3 個まで積める場合
 uv run depot-planner run saitama_all33 --capacity 2 --max-deliveries 4   # 2 個ずつ、積み直して最大 4 か所
+uv run depot-planner run saitama_all33 --vehicles 10        # 車両の総数を 10 台に固定（0 で自動）
 uv run depot-planner run saitama_all33 --k 6 --no-routing   # 採用数だけ変えて選定のみ
 uv run depot-planner run scenarios/x.json --json --no-save  # 結果を JSON で標準出力
 uv run depot-planner search "利根川上流河川事務所 目吹"       # 地点検索（座標付き）
@@ -49,7 +50,7 @@ uv run depot-planner add saitama_all33 --target "点34" --latlon 36.0,139.5
 uv run depot-planner new "新しいシナリオ"
 ```
 
-`run` の `--capacity` / `--max-deliveries` / `--time-limit` / `--no-routing` / `--k` はその実行だけの上書きで、
+`run` の `--capacity` / `--max-deliveries` / `--vehicles` / `--time-limit` / `--no-routing` / `--k` はその実行だけの上書きで、
 シナリオファイルは書き換えない。
 
 `runs/<日時_名前>/` には `result.json`（全結果）、`assignments.csv`（担当一覧）、
@@ -77,7 +78,7 @@ uv run depot-planner new "新しいシナリオ"
     "profile": "driving", "provider": "mapbox", "objective": "makespan",
     "sensitivity": {"enabled": true, "min": 3, "max": 10},
     "max_exact_combinations": 5000000,
-    "routing": {"enabled": true, "vehicle_capacity": 1, "max_deliveries": null, "time_limit_sec": 30}
+    "routing": {"enabled": true, "vehicle_capacity": 1, "num_vehicles": null, "max_deliveries": null, "time_limit_sec": 30}
   }
 }
 ```
@@ -92,7 +93,8 @@ uv run depot-planner new "新しいシナリオ"
 | `max_exact_combinations` | 組合せ数がこれ以下なら総当たりで厳密解、超えたら貪欲法＋入替え探索の近似解 |
 | `routing.enabled` | false ならルート最適化をせず選定だけ |
 | `routing.vehicle_capacity` | 1 台に積み込める機材の数（＝1 回の積込で配れる地点数） |
-| `routing.max_deliveries` | 1 台あたりの配送件数上限。`null` なら積載量と同じ（積み直しなし）。大きくすると補給地点へ戻って積み直す往復を許す |
+| `routing.num_vehicles` | 車両の総数。`null` なら各拠点の機材を 1 回で積み切れる台数（自動）。指定すると機材数に比例して各拠点へ割り振る |
+| `routing.max_deliveries` | 1 台あたりの配送件数上限。`null` なら台数自動のとき積載量と同じ（積み直しなし）、台数指定のとき上限なし。大きくすると補給地点へ戻って積み直す往復を許す |
 | `routing.time_limit_sec` | ルート探索にかける秒数 |
 
 ## モデル
@@ -104,7 +106,9 @@ uv run depot-planner new "新しいシナリオ"
 - 「下限」は、全候補を使っても最長所要がそれ未満にならない値（最も遠い目的地と、その最寄り候補の所要時間）。
 
 **ルート最適化（`depot_planner/routing.py`）**
-- 各拠点には、機材を 1 回で積み切れる台数 `ceil(機材数 / 積載量)` の車両が待機する。積載量 1 なら 1 目的地 1 台。
+- 車両の総数が未指定なら、各拠点には機材を 1 回で積み切れる台数 `ceil(機材数 / 積載量)` の車両が待機する。積載量 1 なら 1 目的地 1 台。
+- 総数を指定した場合は、機材のある拠点へまず 1 台ずつ（機材の多い順）、残りを機材数に比例して（ドント方式）配置する。
+  台数が足りなければ、車両は補給地点へ戻って積み直しながら複数回に分けて配る。
 - 車両は「補給地点で最大 C 個積む → 順に配る →（上限が許せば）補給地点へ戻って積み直す」を繰り返す。
   車両と補給地点の所属は固定しない（在庫が残っていればどの拠点から積んでもよい）。
 - 目的: 最も遅い車両の所要時間を最小化。補給地点への帰路は所要に含めない。

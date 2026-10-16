@@ -7,8 +7,10 @@
 前提:
     車 1 台に積める機材は vehicle_capacity 個まで(容量 C)。各車両は
         補給地点で最大 C 個積む → 最大 C か所の目的地へ順に配る → 補給地点へ戻って積み直す
-    を繰り返す。補給地点 i には stock[i] 個の機材があり、ceil(stock[i] / C) 台の車両が
-    そこで待機している。車両と補給地点に固定の所属はなく、在庫が残っていれば
+    を繰り返す。補給地点 i には stock[i] 個の機材がある。車両の総数を指定しなければ
+    ceil(stock[i] / C) 台の車両が補給地点 i で待機する。総数を指定した場合は、
+    その台数を機材数に比例して各補給地点へ割り振る(allocate_vehicles)。
+    車両と補給地点に固定の所属はなく、在庫が残っていれば
     どの車両もどの補給地点から積んでよい。
 
 目的:
@@ -36,6 +38,27 @@ MAKESPAN_WEIGHT = 10000
 def vehicles_needed(stock, capacity):
     """機材 stock 個を積載量 capacity の車両で 1 回に積み切る台数。"""
     return math.ceil(stock / capacity)
+
+
+def allocate_vehicles(stock, capacity, total=None):
+    """補給地点ごとの待機台数を返す。
+
+    total=None なら各拠点の機材を 1 回で積み切れる台数(vehicles_needed)。
+    total を指定したら、機材のある拠点へまず 1 台ずつ(機材の多い順)、
+    残りを「機材数 / (割当台数 + 1)」が最大の拠点へ 1 台ずつ配る(ドント方式)。
+    """
+    if total is None:
+        return [vehicles_needed(s, capacity) for s in stock]
+    alloc = [0] * len(stock)
+    stocked = sorted((i for i, s in enumerate(stock) if s > 0), key=lambda i: -stock[i])
+    if not stocked:
+        return alloc
+    for i in stocked[:total]:
+        alloc[i] = 1
+    for _ in range(total - sum(alloc)):
+        i = max(stocked, key=lambda i: stock[i] / (alloc[i] + 1))
+        alloc[i] += 1
+    return alloc
 
 
 # ---------------------------------------------------------------------------
@@ -91,45 +114,52 @@ def build_node_model(n_depots, n_targets, stock, vehicle_depots):
     return m
 
 
-def _initial_routes(m, vehicle_depots, move, per_vehicle):
-    """「待機地点で積めるだけ積み、近い目的地から配る」自明解を作る(探索の種)。
+def _initial_routes(m, vehicle_depots, move, capacity, max_deliveries):
+    """「近い目的地を均等に受け持ち、近い補給地点で積んでは近い順に配る」自明解を作る(探索の種)。
 
-    制約が厳しい(1 台 1 か所など)と OR-Tools の構築ヒューリスティクスが
-    初期解を作れないことがあるため。作れなければ None。
+    制約が厳しい(1 台 1 か所、台数が少なく積み直しが必須など)と OR-Tools の
+    構築ヒューリスティクスが初期解を作れないことがあるため。作れなければ None。
     """
-    if len(vehicle_depots) * per_vehicle < m.n_targets:
+    nv, n = len(vehicle_depots), m.n_targets
+    quota = min(max_deliveries, math.ceil(n / nv))
+    if nv * quota < n:
         return None
     pool = {}
     for pn in m.pickup_nodes:
         pool.setdefault(m.depot_of[pn], []).append(pn)
 
     pairs = sorted((move(sn, tn), k, tn) for k, sn in enumerate(m.start_nodes)
-                   for tn in range(m.n_targets))
-    pickups = [[] for _ in vehicle_depots]
+                   for tn in range(n))
     drops = [[] for _ in vehicle_depots]
     done = set()
     for _, k, tn in pairs:
-        if tn in done or len(drops[k]) >= per_vehicle or not pool.get(vehicle_depots[k]):
+        if tn in done or len(drops[k]) >= quota:
             continue
-        pickups[k].append(pool[vehicle_depots[k]].pop())
         drops[k].append(tn)
         done.add(tn)
-    if len(done) < m.n_targets:
+    if len(done) < n:
         return None
 
     routes = []
-    for k in range(len(vehicle_depots)):
-        order, here, rest = [], m.start_nodes[k], list(drops[k])
+    for k in range(nv):
+        route, here, rest = [], m.start_nodes[k], list(drops[k])
         while rest:
-            nxt = min(rest, key=lambda tn: move(here, tn))
-            order.append(nxt)
-            rest.remove(nxt)
-            here = nxt
-        routes.append(pickups[k] + order)
+            # 在庫の残っている最寄りの補給地点で、積めるだけ積む
+            depot = min((d for d in pool if pool[d]), key=lambda d: move(here, pool[d][-1]))
+            c = min(capacity, len(rest), len(pool[depot]))
+            for _ in range(c):
+                here = pool[depot].pop()
+                route.append(here)
+            for _ in range(c):
+                nxt = min(rest, key=lambda tn: move(here, tn))
+                route.append(nxt)
+                rest.remove(nxt)
+                here = nxt
+        routes.append(route)
     return routes
 
 
-def solve_routes(time, stock, capacity=1, max_deliveries=None,
+def solve_routes(time, stock, capacity=1, max_deliveries=None, num_vehicles=None,
                  service_min=0.0, reload_min=0.0, time_limit_sec=30,
                  progress=None, cancel=None):
     """各車両の順路を求める。
@@ -137,8 +167,10 @@ def solve_routes(time, stock, capacity=1, max_deliveries=None,
     time           : (k+n, k+n) の移動時間[分]。並びは [補給地点..., 目的地...]
     stock          : 補給地点ごとの機材数(合計 = 目的地数 n)
     capacity       : 1 台に積める機材の数
-    max_deliveries : 1 台あたりの配送件数の上限(積み直し込み)。None なら capacity と同じ
-                     (1 回の積込で配り切り、積み直さない)
+    max_deliveries : 1 台あたりの配送件数の上限(積み直し込み)。None なら
+                     台数自動のとき capacity と同じ(1 回の積込で配り切り、積み直さない)、
+                     台数指定のとき上限なし(足りない分は積み直しで補う)
+    num_vehicles   : 車両の総数。None なら各拠点で 1 回に積み切れる台数の合計
     戻り値: dict | None(解なし)
         makespan    : 最も遅い車両の所要時間[分]
         vehicles    : [{start, time_min, deliveries, stops}, ...]
@@ -151,10 +183,13 @@ def solve_routes(time, stock, capacity=1, max_deliveries=None,
         raise ValueError(f"積載量は 1 以上にしてください: {capacity}")
     if sum(stock) < n:
         raise ValueError(f"機材不足: 合計 {sum(stock)} < 目的地 {n}")
+    if num_vehicles is not None and num_vehicles < 1:
+        raise ValueError(f"車両の総数は 1 以上にしてください: {num_vehicles}")
     if max_deliveries is None:
-        max_deliveries = capacity
+        max_deliveries = capacity if num_vehicles is None else max(n, 1)
 
-    vehicle_depots = [i for i, s in enumerate(stock) for _ in range(vehicles_needed(s, capacity))]
+    alloc = allocate_vehicles(stock, capacity, num_vehicles)
+    vehicle_depots = [i for i, a in enumerate(alloc) for _ in range(a)]
     nv = len(vehicle_depots)
     if max_deliveries * nv < n:
         raise ValueError(f"台数不足: {nv} 台 x 上限 {max_deliveries} 件 < 目的地 {n} 件")
@@ -223,8 +258,7 @@ def solve_routes(time, stock, capacity=1, max_deliveries=None,
 
     routing.AddAtSolutionCallback(on_solution)
 
-    per_vehicle = min(capacity, max_deliveries)
-    seed = _initial_routes(m, vehicle_depots, move, per_vehicle)
+    seed = _initial_routes(m, vehicle_depots, move, capacity, max_deliveries)
     if seed is not None:
         routing.CloseModelWithParameters(params)
         initial = routing.ReadAssignmentFromRoutes(seed, True)
@@ -260,5 +294,5 @@ def solve_routes(time, stock, capacity=1, max_deliveries=None,
                          "deliveries": sum(s["kind"] == "deliver" for s in stops),
                          "stops": stops})
     return {"makespan": round(makespan, 1), "vehicles": vehicles,
-            "num_vehicles": nv, "solutions_found": found[0],
+            "num_vehicles": nv, "max_deliveries": max_deliveries, "solutions_found": found[0],
             "elapsed_sec": round(_time.monotonic() - started, 1)}

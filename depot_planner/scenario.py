@@ -40,7 +40,9 @@ DEFAULT_PARAMS = {
     "routing": {
         "enabled": True,
         "vehicle_capacity": 1,      # 1 台に積み込める機材の数
-        "max_deliveries": None,     # 1 台あたりの配送件数上限。None = 積載量と同じ(積み直しなし)
+        "num_vehicles": None,       # 車両の総数。None = 各拠点の機材を 1 回で積み切れる台数(自動)
+        "max_deliveries": None,     # 1 台あたりの配送件数上限。None = 台数自動なら積載量と同じ(積み直しなし)、
+                                    #   台数指定なら上限なし
         "time_limit_sec": 30,       # 探索時間[秒]
     },
 }
@@ -128,10 +130,16 @@ def validate(sc):
     rt = p.get("routing") or {}
     if rt.get("enabled"):
         cap, md, tl = rt.get("vehicle_capacity"), rt.get("max_deliveries"), rt.get("time_limit_sec")
+        nv = rt.get("num_vehicles")
         if not _is_int(cap) or cap < 1:
             errors.append("積載量は 1 以上の整数にしてください")
         if md is not None and (not _is_int(md) or md < 1):
             errors.append("1 台あたりの配送上限は 1 以上の整数か空欄にしてください")
+        if nv is not None and (not _is_int(nv) or nv < 1):
+            errors.append("車両の総数は 1 以上の整数か空欄にしてください")
+        elif _is_int(nv) and _is_int(md) and md >= 1 and nv * md < len(targets):
+            errors.append(f"車両 {nv} 台 x 配送上限 {md} 件では目的地 {len(targets)} 件を回り切れません"
+                          "(台数か配送上限を増やすか、配送上限を空欄にしてください)")
         if not _is_int(tl) or not 1 <= tl <= 3600:
             errors.append("ルート探索時間は 1〜3600 秒の整数にしてください")
     for kind, items in (("目的地", sc["targets"]), ("補給地点", sc["candidates"])):

@@ -364,13 +364,14 @@ function renderParams() {
   f.rt_enabled.checked = !!p.routing.enabled;
   f.rt_capacity.value = p.routing.vehicle_capacity;
   f.rt_max_deliveries.value = p.routing.max_deliveries ?? "";
+  f.rt_num_vehicles.value = p.routing.num_vehicles ?? "";
   f.rt_time_limit.value = p.routing.time_limit_sec;
   syncRoutingInputs();
 }
 
 function syncRoutingInputs() {
   const f = $("#params-form");
-  for (const n of ["rt_capacity", "rt_max_deliveries", "rt_time_limit"]) f[n].disabled = !f.rt_enabled.checked;
+  for (const n of ["rt_capacity", "rt_max_deliveries", "rt_num_vehicles", "rt_time_limit"]) f[n].disabled = !f.rt_enabled.checked;
 }
 
 function readParams() {
@@ -391,6 +392,7 @@ function readParams() {
     enabled: f.rt_enabled.checked,
     vehicle_capacity: Math.round(num(f.rt_capacity.value, 1)),
     max_deliveries: f.rt_max_deliveries.value === "" ? null : Math.round(num(f.rt_max_deliveries.value, 1)),
+    num_vehicles: f.rt_num_vehicles.value === "" ? null : Math.round(num(f.rt_num_vehicles.value, 1)),
     time_limit_sec: Math.round(num(f.rt_time_limit.value, 30)),
   };
   syncRoutingInputs();
@@ -701,7 +703,7 @@ function renderResults() {
          <div class="hero-sub">拠点数を増やしても ${fmt(s.lower_bound_min)} 分未満にはならない（${esc(s.bottleneck_target)} が最寄りの補給地点からも遠い）</div>`}
     <div class="tiles">
       <div class="tile"><div class="k">採用拠点</div><div class="v">${s.num_depots} / ${s.num_candidates}</div></div>
-      <div class="tile"><div class="k">車両（積載 ${s.vehicle_capacity} 個）</div><div class="v">${s.num_vehicles} 台</div></div>
+      <div class="tile"><div class="k">車両（積載 ${s.vehicle_capacity} 個${s.fixed_fleet ? "・総数指定" : ""}）</div><div class="v">${s.num_vehicles} 台</div></div>
       <div class="tile"><div class="k">平均所要</div><div class="v">${fmt(s.avg_min)} 分</div></div>
       <div class="tile"><div class="k">総所要</div><div class="v">${fmt(s.total_min)} 分</div></div>
       <div class="tile"><div class="k">解法</div><div class="v">${s.method === "exact" ? "厳密解" : "近似解"}</div></div>

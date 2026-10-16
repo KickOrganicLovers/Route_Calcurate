@@ -4,6 +4,7 @@
     uv run depot-planner gui                      GUI を起動(ブラウザが開く)
     uv run depot-planner run scenarios/x.json     シナリオを実行して runs/ に保存
     uv run depot-planner run x --capacity 3       積載量を一時的に変えて実行
+    uv run depot-planner run x --vehicles 10      車両の総数を 10 台にして実行
     uv run depot-planner search "目吹出張所"       Mapbox で地点検索(座標付き)
     uv run depot-planner add scenarios/x.json --candidate "目吹出張所" --group 国交省
     uv run depot-planner new "新しいシナリオ"      空のシナリオを作成
@@ -78,6 +79,8 @@ def cmd_run(a):
         rt["vehicle_capacity"] = a.capacity
     if a.max_deliveries is not None:
         rt["max_deliveries"] = a.max_deliveries
+    if a.vehicles is not None:
+        rt["num_vehicles"] = a.vehicles or None      # 0 なら自動に戻す
     if a.time_limit is not None:
         rt["time_limit_sec"] = a.time_limit
     if sc["params"]["provider"] in ("mapbox", "auto") and not a.no_fetch:
@@ -196,6 +199,8 @@ def main(argv=None):
     r.add_argument("--capacity", type=int, metavar="N", help="1 台に積み込める機材の数を一時的に上書き")
     r.add_argument("--max-deliveries", type=int, metavar="N",
                    help="1 台あたりの配送件数上限(積載量より大きくすると積み直しを許す)")
+    r.add_argument("--vehicles", type=int, metavar="N",
+                   help="車両の総数を一時的に上書き(0 で自動 = 各拠点で 1 回に積み切れる台数)")
     r.add_argument("--time-limit", type=int, metavar="SEC", help="ルート探索時間[秒]を一時的に上書き")
     r.add_argument("--no-routing", action="store_true", help="ルート最適化を行わず選定だけ")
     r.add_argument("--out", help="保存先ディレクトリ(既定: runs/<日時_名前>)")

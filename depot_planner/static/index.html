@@ -92,8 +92,11 @@
             <label>1 台に積める機材の数 <input name="rt_capacity" type="number" min="1" step="1"></label>
             <label>1 台の配送上限 <input name="rt_max_deliveries" type="number" min="1" step="1" placeholder="積載量と同じ"></label>
           </div>
-          <label>探索時間（秒） <input name="rt_time_limit" type="number" min="1" max="3600" step="1"></label>
-          <p class="hint">各拠点の機材を 1 回で積み切れる台数の車両が待機します。配送上限を積載量より大きくすると、補給地点へ戻って積み直す往復も許します。</p>
+          <div class="row2">
+            <label>車両の総数 <input name="rt_num_vehicles" type="number" min="1" step="1" placeholder="自動"></label>
+            <label>探索時間（秒） <input name="rt_time_limit" type="number" min="1" max="3600" step="1"></label>
+          </div>
+          <p class="hint">車両の総数が空欄なら、各拠点の機材を 1 回で積み切れる台数の車両が待機します。総数を指定すると、その台数を機材数に比例して各拠点へ配置し、足りない分は補給地点へ戻って積み直します（このとき配送上限の空欄は「上限なし」）。配送上限を積載量より大きくすると、積み直しの往復も許します。</p>
         </fieldset>
         <fieldset>
           <legend>移動時間</legend>
