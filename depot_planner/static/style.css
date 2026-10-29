@@ -144,11 +144,10 @@ h3 { font-size: 14px; font-weight: 600; line-height: 1.29; letter-spacing: .16px
 .result-tools { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin: 8px 0; }
 .downloads { display: flex; flex-wrap: wrap; margin: 0 -16px; }
 .downloads .cds--btn { padding-inline: 16px; }
-.table-wrap { margin: 0 -16px; overflow-x: auto; }
+.table-wrap { margin: 0; overflow-x: auto; }
 .cds--data-table { font-size: 12px; }
 .cds--data-table th, .cds--data-table td { font-family: var(--font); }
 .cds--data-table td, .cds--data-table th { padding-inline: 8px; }
-.cds--data-table td:first-child, .cds--data-table th:first-child { padding-left: 16px; }
 .cds--data-table td.n, .cds--data-table th.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .cds--data-table th.n .cds--table-header-label { text-align: right; }
 .cds--data-table tbody td { vertical-align: top; padding-block: 8px; height: auto; }
