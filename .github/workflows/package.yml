@@ -1,0 +1,48 @@
+# 配布用の Windows exe / macOS .app をビルドする。
+#   - 手動実行(Actions タブの Run workflow): 成果物(Artifacts)に zip を置く
+#   - v* のタグを push: さらに GitHub Releases に zip を添付する
+name: package
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            asset: DepotPlanner-windows-x64.zip
+          - os: macos-latest
+            asset: DepotPlanner-macos-arm64.zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv sync --extra desktop --group build --group dev
+      - run: uv run pytest -q
+      - run: uv run pyinstaller packaging/depot_planner.spec --noconfirm
+
+      - name: zip (Windows)
+        if: runner.os == 'Windows'
+        run: Compress-Archive -Path dist/DepotPlanner -DestinationPath ${{ matrix.asset }}
+      - name: zip (macOS)
+        if: runner.os == 'macOS'
+        run: ditto -c -k --keepParent dist/DepotPlanner.app ${{ matrix.asset }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          files: ${{ matrix.asset }}

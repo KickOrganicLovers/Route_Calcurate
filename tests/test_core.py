@@ -113,6 +113,20 @@ def test_save_token_keeps_other_lines(tmp_path, monkeypatch):
     assert config.get_token(env) == "pk.new"
 
 
+def test_ensure_data_dir_copies_samples_once(tmp_path, monkeypatch):
+    bundled, data = tmp_path / "bundled", tmp_path / "data" / "scenarios"
+    bundled.mkdir()
+    (bundled / "a.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(config, "BUNDLED_SCENARIO_DIR", bundled)
+    monkeypatch.setattr(config, "SCENARIO_DIR", data)
+    config.ensure_data_dir()
+    assert [p.name for p in data.glob("*.json")] == ["a.json"]
+    (data / "a.json").unlink()
+    (data / "mine.json").write_text("{}", encoding="utf-8")
+    config.ensure_data_dir()                       # 利用者のシナリオがあれば何もしない
+    assert [p.name for p in data.glob("*.json")] == ["mine.json"]
+
+
 def test_api_run_and_scenarios(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "build_matrix", _fake_matrix)
     monkeypatch.setattr(scn, "scenario_path", lambda name, directory=tmp_path: tmp_path / scn.safe_filename(name))

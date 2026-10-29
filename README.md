@@ -34,6 +34,32 @@ uv run depot-planner gui          # http://127.0.0.1:8765/ がブラウザで開
   地図には車両ごとの順路を Mapbox Directions API で取った道路沿いの線で描く（取得できない車両は立ち寄り順の直線）。
 - シナリオは「保存」で `scenarios/<名前>.json` に書き出される（CLI と共通）。
 
+## デスクトップアプリ（Windows exe / macOS .app）
+
+ブラウザではなく専用のウィンドウで GUI を開く。中身は上の GUI と同じ（pywebview で表示）。
+
+```
+uv sync --extra desktop
+uv run depot-planner-app                                   # ソースから専用ウィンドウで起動
+
+uv sync --extra desktop --group build
+uv run pyinstaller packaging/depot_planner.spec --noconfirm # dist/ に exe / .app を作る
+```
+
+PyInstaller は動かした OS 向けにしか作れないので、配布物は GitHub Actions（`.github/workflows/package.yml`）で作る。
+Actions タブの「package」→ Run workflow で Windows / macOS の zip が Artifacts に出る。
+`v0.3.0` のようなタグを push すると Releases にも添付される。
+
+- 動作には**インターネット接続が必要**（地図・検索・所要時間はすべて Mapbox）。
+- パッケージ版のデータ（`.env` のトークン・シナリオ・実行結果・キャッシュ）は次のフォルダに置く。
+  初回起動時に同梱のサンプルシナリオをコピーする。環境変数 `DEPOT_PLANNER_HOME` で変更できる。
+  - Windows: `%APPDATA%\depot-planner`
+  - macOS: `~/Library/Application Support/depot-planner`
+- 署名していないので、初回は警告が出る。
+  - Windows: SmartScreen の「詳細情報」→「実行」
+  - macOS: アプリを右クリック →「開く」（それでも開けなければ `xattr -dr com.apple.quarantine DepotPlanner.app`）
+- Windows は Edge WebView2 ランタイムを使う（Windows 10/11 には標準で入っている）。
+
 ## CLI
 
 ```
@@ -127,11 +153,12 @@ uv run depot-planner new "新しいシナリオ"
 | パス | 役割 |
 |---|---|
 | `depot_planner/cli.py` | CLI 入口（`uv run depot-planner ...`） |
+| `depot_planner/desktop.py`, `packaging/` | デスクトップアプリの入口と PyInstaller の設定 |
 | `depot_planner/server.py`, `static/` | GUI（FastAPI + Mapbox GL JS） |
 | `depot_planner/runner.py` | シナリオ 1 本の実行（選定 → ルート最適化）。GUI / CLI 共通 |
 | `depot_planner/solver.py` | 補給地点の選定（p-center / p-median） |
 | `depot_planner/routing.py` | 配分ルート最適化（OR-Tools） |
-| `depot_planner/travel_times.py`, `mapbox_api.py` | 所要時間の取得とキャッシュ、Mapbox 検索 |
+| `depot_planner/travel_times.py`, `mapbox_api.py` | 所要時間の取得とキャッシュ、Mapbox 検索・道路沿いの線 |
 | `depot_planner/scenario.py` | シナリオ JSON の読み書きと検証 |
 | `depot_planner/report.py` | JSON / CSV / docx の書き出し |
 | `scenarios/` | シナリオファイル |
