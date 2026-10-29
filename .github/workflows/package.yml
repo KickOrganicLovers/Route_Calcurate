@@ -1,12 +1,21 @@
 # 配布用の Windows exe / macOS .app をビルドする。
-#   - 手動実行(Actions タブの Run workflow): 成果物(Artifacts)に zip を置く
+#   - アプリに関わるファイルを変えて push / 手動実行(Actions タブの Run workflow):
+#     成果物(Artifacts)に zip を置く
 #   - v* のタグを push: さらに GitHub Releases に zip を添付する
 name: package
 
 on:
   workflow_dispatch:
   push:
+    branches: ["**"]
     tags: ["v*"]
+    paths:
+      - "depot_planner/**"
+      - "packaging/**"
+      - "scenarios/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/package.yml"
 
 permissions:
   contents: write

@@ -134,6 +134,8 @@ def test_api_run_and_scenarios(tmp_path, monkeypatch):
     c = TestClient(server.app)
 
     assert c.get("/api/config").status_code == 200
+    assert c.get("/").status_code == 200
+    assert c.get("/static/vendor/carbon/styles.min.css").status_code == 200
     r = c.put("/api/scenarios/テスト", json=_scenario())
     assert r.status_code == 200 and r.json()["file"] == "テスト.json"
     assert c.get("/api/scenarios/テスト.json").json()["scenario"]["name"] == "テスト"

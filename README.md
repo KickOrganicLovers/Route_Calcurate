@@ -47,7 +47,7 @@ uv run pyinstaller packaging/depot_planner.spec --noconfirm # dist/ に exe / .a
 ```
 
 PyInstaller は動かした OS 向けにしか作れないので、配布物は GitHub Actions（`.github/workflows/package.yml`）で作る。
-Actions タブの「package」→ Run workflow で Windows / macOS の zip が Artifacts に出る。
+アプリに関わるファイルを変えて push するか、Actions タブの「package」→ Run workflow で Windows / macOS の zip が Artifacts に出る。
 `v0.3.0` のようなタグを push すると Releases にも添付される。
 
 - 動作には**インターネット接続が必要**（地図・検索・所要時間はすべて Mapbox）。
@@ -154,7 +154,7 @@ uv run depot-planner new "新しいシナリオ"
 |---|---|
 | `depot_planner/cli.py` | CLI 入口（`uv run depot-planner ...`） |
 | `depot_planner/desktop.py`, `packaging/` | デスクトップアプリの入口と PyInstaller の設定 |
-| `depot_planner/server.py`, `static/` | GUI（FastAPI + Mapbox GL JS） |
+| `depot_planner/server.py`, `static/` | GUI（FastAPI + Mapbox GL JS。見た目は IBM Carbon Design System、`static/vendor/carbon/` に `@carbon/styles` のビルド済み CSS を同梱） |
 | `depot_planner/runner.py` | シナリオ 1 本の実行（選定 → ルート最適化）。GUI / CLI 共通 |
 | `depot_planner/solver.py` | 補給地点の選定（p-center / p-median） |
 | `depot_planner/routing.py` | 配分ルート最適化（OR-Tools） |
