@@ -139,6 +139,41 @@ def test_api_run_and_scenarios(tmp_path, monkeypatch):
     for fmt in ("json", "csv", "routes", "docx"):
         assert c.get(f"/api/runs/{job}/export/{fmt}").status_code == 200
 
+    # 道路沿いの線: 1 台目だけ取得に失敗させ、他は立ち寄り地点をそのまま線にする
+    calls = []
+
+    def fake_line(points, profile="driving", token=None):
+        calls.append(points)
+        if len(calls) == 1:
+            raise server.mapbox_api.MapboxError("NoRoute")
+        return [[lon, lat] for lat, lon in points]
+
+    monkeypatch.setattr(server.mapbox_api, "directions_line", fake_line)
+    g = c.get(f"/api/runs/{job}/geometry").json()
+    assert len(g["vehicles"]) == len(calls) >= 1
+    assert sum(v is None for v in g["vehicles"].values()) == 1 and g["errors"] == ["NoRoute"]
+    assert c.get(f"/api/runs/{job}/geometry").json() == g and len(calls) == len(g["vehicles"])  # 2 回目は再取得しない
+    assert "geometry" not in c.get(f"/api/runs/{job}").json()
+
+
+def test_directions_line_splits_and_joins(monkeypatch):
+    from depot_planner import mapbox_api
+    monkeypatch.setattr(mapbox_api, "DIRECTIONS_COORD_LIMIT", 3)
+    requests = []
+
+    def fake_get(url, params):
+        coords = [[float(x) for x in c.split(",")] for c in url.rsplit("/", 1)[1].split(";")]
+        requests.append(coords)
+        return {"code": "Ok", "routes": [{"geometry": {"coordinates": coords}}]}
+
+    monkeypatch.setattr(mapbox_api, "_get_json", fake_get)
+    pts = [(35.0, 139.0), (35.0, 139.0), (35.1, 139.1), (35.2, 139.2), (35.3, 139.3), (35.4, 139.4)]
+    line = mapbox_api.directions_line(pts, token="pk.x")
+    # 連続する同一地点はまとめ、3 点ずつ端点を重ねて分割、つなぎ目は 1 回だけ
+    assert [len(r) for r in requests] == [3, 3]
+    assert line == [[lon, lat] for lat, lon in pts[1:]]
+    assert mapbox_api.directions_line([(35.0, 139.0), (35.0, 139.0)], token="pk.x") is None
+
 
 # ---------------------------------------------------------------------------
 # 配分ルート最適化

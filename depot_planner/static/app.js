@@ -30,6 +30,7 @@ const state = {
   resultStale: false,  // 結果の後に条件を変えたか
   showResult: true,
   vehicle: null,       // 地図で強調する車両番号(ルート最適化の結果)
+  routeLines: null,    // 車両番号 → 道路沿いの線 [[lon, lat], ...](Directions API。取得前は null)
 };
 let map = null;
 const markers = { targets: new Map(), candidates: new Map() };
@@ -146,6 +147,7 @@ function setScenario(sc, file) {
   state.selected = null;
   state.result = null;
   state.resultJob = null;
+  state.routeLines = null;
   state.resultStale = false;
   $("#dirty-mark").hidden = true;
   renderAll();
@@ -562,14 +564,26 @@ function renderLinks(ri) {
   src.setData({ type: "FeatureCollection", features });
 }
 
-// 車両ごとの順路: 待機拠点 → 立ち寄り順に直線で結ぶ(道路形状ではない)
+// 車両ごとの順路を道路沿いの線で取得する。届くまで(や取得に失敗した車両)は直線で描く
+async function loadRouteLines(jobId) {
+  let g;
+  try { g = await api(`/api/runs/${jobId}/geometry`); }
+  catch (e) { toast(`道路沿いのルートを取得できませんでした: ${e.message}`); return; }
+  if (state.resultJob !== jobId) return;   // 取得中に別の結果へ切り替わった
+  state.routeLines = new Map(Object.entries(g.vehicles).filter(([, line]) => line).map(([no, line]) => [+no, line]));
+  if (g.errors.length) toast(`一部の車両は直線で表示しています: ${g.errors[0]}`);
+  renderRoutes(resultIndex());
+}
+
+// 車両ごとの順路: 待機拠点 → 立ち寄り順。道路沿いの線があればそれを、無ければ直線で結ぶ
 function renderRoutes(ri) {
   const src = map.getSource("routes");
   if (!src) return;
   const features = [];
   if (ri && ri.routing) {
     for (const v of ri.routing.vehicles) {
-      const coords = [[v.start_lon, v.start_lat], ...v.stops.map((st) => [st.lon, st.lat])];
+      const coords = (state.routeLines && state.routeLines.get(v.no))
+        || [[v.start_lon, v.start_lat], ...v.stops.map((st) => [st.lon, st.lat])];
       const sel = state.vehicle === v.no;
       features.push({
         type: "Feature",
@@ -659,12 +673,14 @@ async function poll() {
   if (j.status === "done") {
     state.result = j.result;
     state.resultJob = id;
+    state.routeLines = null;
     state.resultStale = false;
     state.showResult = true;
     state.vehicle = null;
     renderResults();
     renderMarkers();
     fitAll();
+    if (j.result.routing) loadRouteLines(id);
   } else if (j.status === "cancelled") {
     toast("中止しました");
   } else {
