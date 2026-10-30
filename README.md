@@ -59,6 +59,8 @@ PyInstaller は動かした OS 向けにしか作れないので、配布物は 
   - Windows: SmartScreen の「詳細情報」→「実行」
   - macOS: アプリを右クリック →「開く」（それでも開けなければ `xattr -dr com.apple.quarantine DepotPlanner.app`）
 - Windows は Edge WebView2 ランタイムを使う（Windows 10/11 には標準で入っている）。
+- zip は「すべて展開」してから中の `DepotPlanner.exe` を開く。ダウンロードしたファイルに付く
+  「インターネットから来た」印（Zone.Identifier）は起動時にアプリが外す（付いたままだと .NET が DLL を読まず起動できない）。
 
 ## CLI
 

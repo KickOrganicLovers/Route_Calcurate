@@ -6,17 +6,35 @@ pywebview の専用ウィンドウで開く。ウィンドウを閉じるとサ�
 画面は OS 標準の WebView(Windows: Edge WebView2 / macOS: WKWebView)で描く。
 """
 
+import os
 import socket
+import sys
 import threading
 import time
 
 import uvicorn
-import webview
 
 from . import config
 from .server import app
 
 TITLE = "補給地点シミュレーター"
+
+
+def _unblock_bundle():
+    """ダウンロードした zip から展開したファイルの「インターネットから来た」印を外す。
+
+    Windows は展開したファイルに Zone.Identifier(Mark of the Web)を付け、
+    .NET はその付いた DLL(pythonnet の Python.Runtime.dll)を読み込まない。
+    すると pywebview が起動できないので、webview を import する前に外しておく。
+    """
+    if not (config.FROZEN and sys.platform == "win32"):
+        return
+    for dirpath, _, filenames in os.walk(config.BUNDLE_ROOT):
+        for name in filenames:
+            try:
+                os.remove(os.path.join(dirpath, name) + ":Zone.Identifier")
+            except OSError:
+                pass  # 印が無い・消せない(書込不可の場所など)ときはそのまま
 
 
 def _free_port():
@@ -26,6 +44,9 @@ def _free_port():
 
 
 def main():
+    _unblock_bundle()
+    import webview  # _unblock_bundle の後で読む(pythonnet の DLL を読むため)
+
     config.ensure_data_dir()
     port = _free_port()
     # log_config=None: ウィンドウアプリでは標準出力が無いので uvicorn にログ設定させない
