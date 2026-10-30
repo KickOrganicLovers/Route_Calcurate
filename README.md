@@ -28,11 +28,39 @@ uv run depot-planner gui          # http://127.0.0.1:8765/ がブラウザで開
   地図をクリックしてその地点を追加することもできる。マーカーはドラッグで位置を微調整できる。
   補給地点には「区分」（報告書の色分け）と「状態」（候補 / 必須 / 除外）とメモを付けられる。
 - **条件タブ**: 採用数、作業時間・積込時間、移動手段、目的関数、感度分析の範囲、
-  **ルート最適化（1 台に積める機材の数・1 台の配送上限・探索時間）**。
+  **ルート最適化（1 台に積める機材の数・1 台の配送上限・車両の総数・探索時間）**。
 - **結果タブ**: 最長所要時間、採用拠点と機材数・車両台数、**車両ごとの順路**（行を押すと地図でその車両を強調）、
   採用数ごとの最長所要時間のグラフ、目的地ごとの担当。Word 報告書 / CSV / JSON をダウンロードできる。
-  地図には車両ごとの順路を立ち寄り順に直線で描く（道路の形ではない）。
+  地図には車両ごとの順路を Mapbox Directions API で取った道路沿いの線で描く（取得できない車両は立ち寄り順の直線）。
 - シナリオは「保存」で `scenarios/<名前>.json` に書き出される（CLI と共通）。
+
+## デスクトップアプリ（Windows exe / macOS .app）
+
+ブラウザではなく専用のウィンドウで GUI を開く。中身は上の GUI と同じ（pywebview で表示）。
+
+```
+uv sync --extra desktop
+uv run depot-planner-app                                   # ソースから専用ウィンドウで起動
+
+uv sync --extra desktop --group build
+uv run pyinstaller packaging/depot_planner.spec --noconfirm # dist/ に exe / .app を作る
+```
+
+PyInstaller は動かした OS 向けにしか作れないので、配布物は GitHub Actions（`.github/workflows/package.yml`）で作る。
+アプリに関わるファイルを変えて push するか、Actions タブの「package」→ Run workflow で Windows / macOS の zip が Artifacts に出る。
+`v0.3.0` のようなタグを push すると Releases にも添付される。
+
+- 動作には**インターネット接続が必要**（地図・検索・所要時間はすべて Mapbox）。
+- パッケージ版のデータ（`.env` のトークン・シナリオ・実行結果・キャッシュ）は次のフォルダに置く。
+  初回起動時に同梱のサンプルシナリオをコピーする。環境変数 `DEPOT_PLANNER_HOME` で変更できる。
+  - Windows: `%APPDATA%\depot-planner`
+  - macOS: `~/Library/Application Support/depot-planner`
+- 署名していないので、初回は警告が出る。
+  - Windows: SmartScreen の「詳細情報」→「実行」
+  - macOS: アプリを右クリック →「開く」（それでも開けなければ `xattr -dr com.apple.quarantine DepotPlanner.app`）
+- Windows は Edge WebView2 ランタイムを使う（Windows 10/11 には標準で入っている）。
+- zip は「すべて展開」してから中の `DepotPlanner.exe` を開く。ダウンロードしたファイルに付く
+  「インターネットから来た」印（Zone.Identifier）は起動時にアプリが外す（付いたままだと .NET が DLL を読まず起動できない）。
 
 ## CLI
 
@@ -41,6 +69,7 @@ uv run depot-planner list                                   # 保存済みシナ
 uv run depot-planner run saitama_all33                      # 実行 → runs/<日時_名前>/ に保存
 uv run depot-planner run saitama_all33 --capacity 3         # 1 台に機材 3 個まで積める場合
 uv run depot-planner run saitama_all33 --capacity 2 --max-deliveries 4   # 2 個ずつ、積み直して最大 4 か所
+uv run depot-planner run saitama_all33 --vehicles 10        # 車両の総数を 10 台に固定（0 で自動）
 uv run depot-planner run saitama_all33 --k 6 --no-routing   # 採用数だけ変えて選定のみ
 uv run depot-planner run scenarios/x.json --json --no-save  # 結果を JSON で標準出力
 uv run depot-planner search "利根川上流河川事務所 目吹"       # 地点検索（座標付き）
@@ -49,7 +78,7 @@ uv run depot-planner add saitama_all33 --target "点34" --latlon 36.0,139.5
 uv run depot-planner new "新しいシナリオ"
 ```
 
-`run` の `--capacity` / `--max-deliveries` / `--time-limit` / `--no-routing` / `--k` はその実行だけの上書きで、
+`run` の `--capacity` / `--max-deliveries` / `--vehicles` / `--time-limit` / `--no-routing` / `--k` はその実行だけの上書きで、
 シナリオファイルは書き換えない。
 
 `runs/<日時_名前>/` には `result.json`（全結果）、`assignments.csv`（担当一覧）、
@@ -77,7 +106,7 @@ uv run depot-planner new "新しいシナリオ"
     "profile": "driving", "provider": "mapbox", "objective": "makespan",
     "sensitivity": {"enabled": true, "min": 3, "max": 10},
     "max_exact_combinations": 5000000,
-    "routing": {"enabled": true, "vehicle_capacity": 1, "max_deliveries": null, "time_limit_sec": 30}
+    "routing": {"enabled": true, "vehicle_capacity": 1, "num_vehicles": null, "max_deliveries": null, "time_limit_sec": 30}
   }
 }
 ```
@@ -92,7 +121,8 @@ uv run depot-planner new "新しいシナリオ"
 | `max_exact_combinations` | 組合せ数がこれ以下なら総当たりで厳密解、超えたら貪欲法＋入替え探索の近似解 |
 | `routing.enabled` | false ならルート最適化をせず選定だけ |
 | `routing.vehicle_capacity` | 1 台に積み込める機材の数（＝1 回の積込で配れる地点数） |
-| `routing.max_deliveries` | 1 台あたりの配送件数上限。`null` なら積載量と同じ（積み直しなし）。大きくすると補給地点へ戻って積み直す往復を許す |
+| `routing.num_vehicles` | 車両の総数。`null` なら各拠点の機材を 1 回で積み切れる台数（自動）。指定すると機材数に比例して各拠点へ割り振る |
+| `routing.max_deliveries` | 1 台あたりの配送件数上限。`null` なら台数自動のとき積載量と同じ（積み直しなし）、台数指定のとき上限なし。大きくすると補給地点へ戻って積み直す往復を許す |
 | `routing.time_limit_sec` | ルート探索にかける秒数 |
 
 ## モデル
@@ -104,7 +134,9 @@ uv run depot-planner new "新しいシナリオ"
 - 「下限」は、全候補を使っても最長所要がそれ未満にならない値（最も遠い目的地と、その最寄り候補の所要時間）。
 
 **ルート最適化（`depot_planner/routing.py`）**
-- 各拠点には、機材を 1 回で積み切れる台数 `ceil(機材数 / 積載量)` の車両が待機する。積載量 1 なら 1 目的地 1 台。
+- 車両の総数が未指定なら、各拠点には機材を 1 回で積み切れる台数 `ceil(機材数 / 積載量)` の車両が待機する。積載量 1 なら 1 目的地 1 台。
+- 総数を指定した場合は、機材のある拠点へまず 1 台ずつ（機材の多い順）、残りを機材数に比例して（ドント方式）配置する。
+  台数が足りなければ、車両は補給地点へ戻って積み直しながら複数回に分けて配る。
 - 車両は「補給地点で最大 C 個積む → 順に配る →（上限が許せば）補給地点へ戻って積み直す」を繰り返す。
   車両と補給地点の所属は固定しない（在庫が残っていればどの拠点から積んでもよい）。
 - 目的: 最も遅い車両の所要時間を最小化。補給地点への帰路は所要に含めない。
@@ -123,11 +155,12 @@ uv run depot-planner new "新しいシナリオ"
 | パス | 役割 |
 |---|---|
 | `depot_planner/cli.py` | CLI 入口（`uv run depot-planner ...`） |
-| `depot_planner/server.py`, `static/` | GUI（FastAPI + Mapbox GL JS） |
+| `depot_planner/desktop.py`, `packaging/` | デスクトップアプリの入口と PyInstaller の設定 |
+| `depot_planner/server.py`, `static/` | GUI（FastAPI + Mapbox GL JS。見た目は IBM Carbon Design System、`static/vendor/carbon/` に `@carbon/styles` のビルド済み CSS を同梱） |
 | `depot_planner/runner.py` | シナリオ 1 本の実行（選定 → ルート最適化）。GUI / CLI 共通 |
 | `depot_planner/solver.py` | 補給地点の選定（p-center / p-median） |
 | `depot_planner/routing.py` | 配分ルート最適化（OR-Tools） |
-| `depot_planner/travel_times.py`, `mapbox_api.py` | 所要時間の取得とキャッシュ、Mapbox 検索 |
+| `depot_planner/travel_times.py`, `mapbox_api.py` | 所要時間の取得とキャッシュ、Mapbox 検索・道路沿いの線 |
 | `depot_planner/scenario.py` | シナリオ JSON の読み書きと検証 |
 | `depot_planner/report.py` | JSON / CSV / docx の書き出し |
 | `scenarios/` | シナリオファイル |

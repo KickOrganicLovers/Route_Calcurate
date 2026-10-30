@@ -9,6 +9,7 @@ import threading
 import time
 import traceback
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -164,13 +165,43 @@ def _job(job_id):
 @app.get("/api/runs/{job_id}")
 def get_run(job_id: str):
     job = _job(job_id)
-    return {k: v for k, v in job.items() if k not in ("cancel", "trace")}
+    return {k: v for k, v in job.items() if k not in ("cancel", "trace", "geometry", "geometry_lock")}
 
 
 @app.post("/api/runs/{job_id}/cancel")
 def cancel_run(job_id: str):
     _job(job_id)["cancel"] = True
     return {"ok": True}
+
+
+def _vehicle_line(v, profile):
+    points = [(v["start_lat"], v["start_lon"])] + [(s["lat"], s["lon"]) for s in v["stops"]]
+    try:
+        return v["no"], mapbox_api.directions_line(points, profile=profile), None
+    except mapbox_api.MapboxError as e:
+        return v["no"], None, str(e)
+
+
+@app.get("/api/runs/{job_id}/geometry")
+def run_geometry(job_id: str):
+    """車両ごとの順路を道路沿いの線で返す(Directions API)。取れなかった車両は null。
+
+    結果ごとに 1 回だけ取得してジョブに覚えておく(地図の描画専用。保存はしない)。
+    """
+    job = _job(job_id)
+    result = job.get("result")
+    if not result:
+        raise HTTPException(409, "結果がありません")
+    with job.setdefault("geometry_lock", threading.Lock()):
+        if "geometry" not in job:
+            vehicles = (result.get("routing") or {}).get("vehicles") or []
+            profile = result["params"]["profile"]
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                rows = list(pool.map(lambda v: _vehicle_line(v, profile), vehicles))
+            errors = sorted({e for _, _, e in rows if e})
+            job["geometry"] = {"vehicles": {str(no): line for no, line, _ in rows},
+                               "errors": errors}
+    return job["geometry"]
 
 
 @app.get("/api/runs/{job_id}/export/{fmt}")

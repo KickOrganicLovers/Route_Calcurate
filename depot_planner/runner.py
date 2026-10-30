@@ -11,7 +11,7 @@ import time
 import numpy as np
 
 from . import scenario as scn
-from .routing import solve_routes, vehicles_needed
+from .routing import allocate_vehicles, solve_routes
 from .solver import solve
 from .travel_times import UNREACHABLE, build_matrix
 
@@ -35,6 +35,7 @@ def run_scenario(sc, progress=None, cancel=None, allow_fetch=True):
     p = sc["params"]
     rt = p["routing"]
     capacity = int(rt["vehicle_capacity"]) if rt.get("enabled") else 1
+    fleet = rt.get("num_vehicles") if rt.get("enabled") else None   # None = 台数自動
     started = time.time()
     # 進捗の配分: 所要時間 → 選定 → (ルート用の所要時間 → ルート探索)
     sel_lo, sel_hi = (0.2, 0.5) if rt.get("enabled") else (0.3, 1.0)
@@ -97,6 +98,8 @@ def run_scenario(sc, progress=None, cancel=None, allow_fetch=True):
         })
     assignments.sort(key=lambda a: -a["time_min"])
 
+    alloc = dict(zip(main["subset"], allocate_vehicles(
+        [len(by_depot[i]) for i in main["subset"]], capacity, fleet)))
     depots = []
     for i in main["subset"]:
         c = cands[i]
@@ -106,7 +109,7 @@ def run_scenario(sc, progress=None, cancel=None, allow_fetch=True):
             "address": c.get("address", ""), "group": c.get("group", ""),
             "note": c.get("note", ""), "status": c["status"],
             "stock": len(js),
-            "vehicles": vehicles_needed(len(js), capacity),
+            "vehicles": alloc[i],
             "max_min": round(float(max((cost[i, j] for j in js), default=0.0)), 1),
             "targets": [targets[j]["name"] for j in js],
             "target_ids": [targets[j]["id"] for j in js],
@@ -123,13 +126,14 @@ def run_scenario(sc, progress=None, cancel=None, allow_fetch=True):
         "result": "除外" if c["status"] == "excluded" else ("採用" if c["id"] in adopted else "-"),
     } for c in sc["candidates"]]
 
+    def sens_depots(r):
+        stocks = [r["owner"].count(i) for i in r["subset"]]
+        return [{"id": cands[i]["id"], "name": cands[i]["name"], "stock": st, "vehicles": nv}
+                for i, st, nv in zip(r["subset"], stocks, allocate_vehicles(stocks, capacity, fleet))]
+
     sensitivity = [{
         "k": k, "makespan_min": round(r["makespan"], 1), "total_min": round(r["total"], 1),
-        "method": r["method"],
-        "depots": [{"id": cands[i]["id"], "name": cands[i]["name"],
-                    "stock": r["owner"].count(i),
-                    "vehicles": vehicles_needed(r["owner"].count(i), capacity)}
-                   for i in r["subset"]],
+        "method": r["method"], "depots": sens_depots(r),
     } for k, r in sorted(runs.items())]
 
     routing = None
@@ -154,6 +158,7 @@ def run_scenario(sc, progress=None, cancel=None, allow_fetch=True):
             "num_targets": n,
             "num_vehicles": sum(d["vehicles"] for d in depots),
             "vehicle_capacity": capacity,
+            "fixed_fleet": fleet is not None,
             "num_depots": k_main,
             "num_candidates": len(cands),
             "num_excluded": len(sc["candidates"]) - len(cands),
@@ -185,6 +190,7 @@ def _run_routing(p, cands, targets, depots, provider, allow_fetch, progress, can
     res = solve_routes(tmat, [d["stock"] for d in used],
                        capacity=int(rt["vehicle_capacity"]),
                        max_deliveries=rt.get("max_deliveries"),
+                       num_vehicles=rt.get("num_vehicles"),
                        service_min=float(p["service_min"]), reload_min=float(p["reload_min"]),
                        time_limit_sec=int(rt["time_limit_sec"]),
                        progress=_stage(progress, 0.55, 1.0), cancel=cancel)
@@ -209,11 +215,11 @@ def _run_routing(p, cands, targets, depots, provider, allow_fetch, progress, can
                          "start_lat": d["lat"], "start_lon": d["lon"],
                          "time_min": v["time_min"], "deliveries": v["deliveries"],
                          "stops": [stop(s) for s in v["stops"]]})
-    md = rt.get("max_deliveries")
     return {
         "vehicle_capacity": int(rt["vehicle_capacity"]),
-        "max_deliveries": int(md) if md is not None else int(rt["vehicle_capacity"]),
+        "max_deliveries": int(res["max_deliveries"]),
         "num_vehicles": res["num_vehicles"],
+        "fixed_fleet": rt.get("num_vehicles") is not None,
         "makespan_min": res["makespan"],
         "total_min": round(sum(v["time_min"] for v in vehicles), 1),
         "time_limit_sec": int(rt["time_limit_sec"]),
@@ -245,7 +251,8 @@ def format_text(result):
         f"目的地 {s['num_targets']} 件 / 選定対象 {s['num_candidates']} 件"
         f"(除外 {s['num_excluded']} 件)から {s['num_depots']} 拠点を採用"
         f"  [{'厳密解' if s['method'] == 'exact' else '近似解'}]",
-        f"積載量 {s['vehicle_capacity']} 個/台 → 車両 {s['num_vehicles']} 台",
+        f"積載量 {s['vehicle_capacity']} 個/台 → 車両 {s['num_vehicles']} 台"
+        + ("(総数を指定)" if s.get("fixed_fleet") else "(1 回で積み切れる台数)"),
         "",
         "=== 1. 補給地点の選定(各目的地へ直行する前提) ===",
         f"最長所要 {s['makespan_min']} 分 / 総所要 {s['total_min']} 分 / 平均 {s['avg_min']} 分",

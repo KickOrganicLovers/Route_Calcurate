@@ -113,6 +113,20 @@ def test_save_token_keeps_other_lines(tmp_path, monkeypatch):
     assert config.get_token(env) == "pk.new"
 
 
+def test_ensure_data_dir_copies_samples_once(tmp_path, monkeypatch):
+    bundled, data = tmp_path / "bundled", tmp_path / "data" / "scenarios"
+    bundled.mkdir()
+    (bundled / "a.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(config, "BUNDLED_SCENARIO_DIR", bundled)
+    monkeypatch.setattr(config, "SCENARIO_DIR", data)
+    config.ensure_data_dir()
+    assert [p.name for p in data.glob("*.json")] == ["a.json"]
+    (data / "a.json").unlink()
+    (data / "mine.json").write_text("{}", encoding="utf-8")
+    config.ensure_data_dir()                       # 利用者のシナリオがあれば何もしない
+    assert [p.name for p in data.glob("*.json")] == ["mine.json"]
+
+
 def test_api_run_and_scenarios(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "build_matrix", _fake_matrix)
     monkeypatch.setattr(scn, "scenario_path", lambda name, directory=tmp_path: tmp_path / scn.safe_filename(name))
@@ -120,6 +134,8 @@ def test_api_run_and_scenarios(tmp_path, monkeypatch):
     c = TestClient(server.app)
 
     assert c.get("/api/config").status_code == 200
+    assert c.get("/").status_code == 200
+    assert c.get("/static/vendor/carbon/styles.min.css").status_code == 200
     r = c.put("/api/scenarios/テスト", json=_scenario())
     assert r.status_code == 200 and r.json()["file"] == "テスト.json"
     assert c.get("/api/scenarios/テスト.json").json()["scenario"]["name"] == "テスト"
@@ -138,6 +154,41 @@ def test_api_run_and_scenarios(tmp_path, monkeypatch):
     assert st["status"] == "done", st
     for fmt in ("json", "csv", "routes", "docx"):
         assert c.get(f"/api/runs/{job}/export/{fmt}").status_code == 200
+
+    # 道路沿いの線: 1 台目だけ取得に失敗させ、他は立ち寄り地点をそのまま線にする
+    calls = []
+
+    def fake_line(points, profile="driving", token=None):
+        calls.append(points)
+        if len(calls) == 1:
+            raise server.mapbox_api.MapboxError("NoRoute")
+        return [[lon, lat] for lat, lon in points]
+
+    monkeypatch.setattr(server.mapbox_api, "directions_line", fake_line)
+    g = c.get(f"/api/runs/{job}/geometry").json()
+    assert len(g["vehicles"]) == len(calls) >= 1
+    assert sum(v is None for v in g["vehicles"].values()) == 1 and g["errors"] == ["NoRoute"]
+    assert c.get(f"/api/runs/{job}/geometry").json() == g and len(calls) == len(g["vehicles"])  # 2 回目は再取得しない
+    assert "geometry" not in c.get(f"/api/runs/{job}").json()
+
+
+def test_directions_line_splits_and_joins(monkeypatch):
+    from depot_planner import mapbox_api
+    monkeypatch.setattr(mapbox_api, "DIRECTIONS_COORD_LIMIT", 3)
+    requests = []
+
+    def fake_get(url, params):
+        coords = [[float(x) for x in c.split(",")] for c in url.rsplit("/", 1)[1].split(";")]
+        requests.append(coords)
+        return {"code": "Ok", "routes": [{"geometry": {"coordinates": coords}}]}
+
+    monkeypatch.setattr(mapbox_api, "_get_json", fake_get)
+    pts = [(35.0, 139.0), (35.0, 139.0), (35.1, 139.1), (35.2, 139.2), (35.3, 139.3), (35.4, 139.4)]
+    line = mapbox_api.directions_line(pts, token="pk.x")
+    # 連続する同一地点はまとめ、3 点ずつ端点を重ねて分割、つなぎ目は 1 回だけ
+    assert [len(r) for r in requests] == [3, 3]
+    assert line == [[lon, lat] for lat, lon in pts[1:]]
+    assert mapbox_api.directions_line([(35.0, 139.0), (35.0, 139.0)], token="pk.x") is None
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +230,25 @@ def test_solve_routes(capacity, max_deliveries):
     assert res["makespan"] == max(v["time_min"] for v in res["vehicles"])
 
 
+@pytest.mark.parametrize("num_vehicles,capacity,max_deliveries",
+                         [(2, 1, None), (3, 2, None), (4, 2, 3), (12, 1, None)])
+def test_solve_routes_fixed_fleet(num_vehicles, capacity, max_deliveries):
+    stock = [4, 3, 2]
+    res = routing.solve_routes(_route_time(), stock, capacity=capacity,
+                               max_deliveries=max_deliveries, num_vehicles=num_vehicles,
+                               service_min=5, reload_min=2, time_limit_sec=1)
+    assert res["num_vehicles"] == len(res["vehicles"]) == num_vehicles
+    _check_routes(res, stock, 9, capacity, max_deliveries or 9)
+
+
+def test_allocate_vehicles():
+    assert routing.allocate_vehicles([4, 3, 2], 2) == [2, 2, 1]          # 自動
+    assert routing.allocate_vehicles([4, 3, 2], 1, total=2) == [1, 1, 0]  # 台数 < 拠点数
+    assert routing.allocate_vehicles([4, 3, 2], 1, total=6) == [3, 2, 1]
+    assert routing.allocate_vehicles([5, 0, 1], 1, total=4) == [3, 0, 1]  # 機材 0 の拠点には置かない
+    assert sum(routing.allocate_vehicles([7, 1, 1], 3, total=10)) == 10
+
+
 def test_solve_routes_errors():
     with pytest.raises(ValueError):
         routing.solve_routes(_route_time(), [4, 3, 2], capacity=0)
@@ -209,5 +279,23 @@ def test_validate_routing():
     assert any("積載量" in e for e in scn.validate(sc))
     sc["params"]["routing"].update(vehicle_capacity=2, max_deliveries=0)
     assert any("配送上限" in e for e in scn.validate(sc))
-    sc["params"]["routing"].update(max_deliveries=None, enabled=False, vehicle_capacity=0)
+    sc["params"]["routing"].update(max_deliveries=None, num_vehicles=0)
+    assert any("車両の総数" in e for e in scn.validate(sc))
+    sc["params"]["routing"].update(num_vehicles=1, max_deliveries=1)
+    assert any("回り切れません" in e for e in scn.validate(sc))
+    sc["params"]["routing"].update(num_vehicles=None, max_deliveries=None, enabled=False, vehicle_capacity=0)
     assert scn.validate(sc) == []        # 無効なら見ない
+
+
+def test_runner_with_fixed_fleet(monkeypatch):
+    monkeypatch.setattr(runner, "build_matrix", _fake_matrix)
+    sc = _scenario()
+    sc["params"]["routing"].update(vehicle_capacity=1, num_vehicles=2)
+    res = runner.run_scenario(sc)
+    rt = res["routing"]
+    assert res["summary"]["num_vehicles"] == rt["num_vehicles"] == 2
+    assert sum(d["vehicles"] for d in res["depots"]) == 2
+    assert rt["fixed_fleet"] and res["summary"]["fixed_fleet"]
+    delivered = [st["id"] for v in rt["vehicles"] for st in v["stops"] if st["kind"] == "deliver"]
+    assert sorted(delivered) == sorted(t["id"] for t in sc["targets"])
+    assert "総数を指定" in runner.format_text(res)

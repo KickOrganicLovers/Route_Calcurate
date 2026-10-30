@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Mapbox API クライアント(Search Box API と Matrix API)。
+"""Mapbox API クライアント(Search Box API / Matrix API / Directions API)。
 
 依存は標準ライブラリのみ。トークンは config.get_token() から取る。
 """
@@ -14,6 +14,10 @@ from . import config
 
 SEARCH_BASE = "https://api.mapbox.com/search/searchbox/v1"
 MATRIX_URL = "https://api.mapbox.com/directions-matrix/v1/mapbox/{profile}/{coords}"
+DIRECTIONS_URL = "https://api.mapbox.com/directions/v5/mapbox/{profile}/{coords}"
+
+# Directions API の 1 リクエストあたり座標上限
+DIRECTIONS_COORD_LIMIT = 25
 
 # Matrix API の 1 リクエストあたり座標上限(driving-traffic だけ 10)
 MATRIX_COORD_LIMIT = {"driving": 25, "walking": 25, "cycling": 25, "driving-traffic": 10}
@@ -165,3 +169,34 @@ def matrix_block(sources, destinations, profile="driving", token=None):
         raise MapboxError(f"Matrix API エラー: {data.get('code')} {data.get('message', '')}")
     return [[(sec / 60.0) if sec is not None else None for sec in row]
             for row in data["durations"]]
+
+
+# ---------------------------------------------------------------------------
+# Directions API(地図に描く道路沿いの線)
+# ---------------------------------------------------------------------------
+def directions_line(points, profile="driving", token=None):
+    """points を順に通る道路沿いの線を [[lon, lat], ...] で返す。
+
+    points: [(lat, lon), ...]  連続する同一地点はまとめる。座標上限を超える分は
+    区間の端点を重ねて分割リクエストし、つなげて返す。地点が 1 つ以下なら None。
+    """
+    pts = []
+    for p in points:
+        if not pts or pts[-1] != tuple(p):
+            pts.append(tuple(p))
+    if len(pts) < 2:
+        return None
+    line = []
+    step = DIRECTIONS_COORD_LIMIT - 1
+    for i in range(0, len(pts) - 1, step):
+        chunk = pts[i:i + DIRECTIONS_COORD_LIMIT]
+        coord_str = ";".join(f"{lon:.7f},{lat:.7f}" for lat, lon in chunk)
+        data = _get_json(DIRECTIONS_URL.format(profile=profile, coords=coord_str), {
+            "geometries": "geojson", "overview": "full", "steps": "false",
+            "access_token": _token(token),
+        })
+        if data.get("code") != "Ok" or not data.get("routes"):
+            raise MapboxError(f"Directions API エラー: {data.get('code')} {data.get('message', '')}")
+        coords = data["routes"][0]["geometry"]["coordinates"]
+        line.extend(coords[1:] if line else coords)   # 区間のつなぎ目は重複させない
+    return line

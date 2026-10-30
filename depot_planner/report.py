@@ -131,7 +131,9 @@ def to_docx(result, path):
     for line in [
         f"目的地 {s['num_targets']} 件／補給地点 候補 {s['num_candidates']} 件"
         f"（除外 {s['num_excluded']} 件）から {s['num_depots']} か所を選定。",
-        f"車両 1 台に積める機材 {s['vehicle_capacity']} 個 → 車両 {s['num_vehicles']} 台。",
+        (f"車両 1 台に積める機材 {s['vehicle_capacity']} 個、車両の総数 {s['num_vehicles']} 台"
+         "（機材数に比例して各拠点へ配置）。" if s.get("fixed_fleet") else
+         f"車両 1 台に積める機材 {s['vehicle_capacity']} 個 → 車両 {s['num_vehicles']} 台。"),
         f"移動時間: {result['provider']}（{PROFILE_LABEL.get(p['profile'], p['profile'])}、道路ネットワーク上の所要時間）。",
         f"作業時間: 目的地での作業 {p['service_min']} 分／補給地点での積込 {p['reload_min']} 分。",
         f"目的関数: {OBJECTIVE_LABEL[p['objective']]}。",

@@ -9,14 +9,35 @@
 // ---------------------------------------------------------------------------
 // 定数・状態
 // ---------------------------------------------------------------------------
-const DARK = window.matchMedia("(prefers-color-scheme: dark)").matches;
-// 採用拠点の色(カテゴリ色。固定順で割り当て、9 件目以降は灰色 + 文字ラベルで区別)
+const DARK = document.documentElement.classList.contains("cds--g100");   // テーマは index.html で決める
+// 採用拠点の色(Carbon のカテゴリ色から白文字が読める中明度のものを固定順で。9 件目以降は灰色 + 文字ラベルで区別)
 const SERIES = DARK
-  ? ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"]
-  : ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"];
-const OTHER = "#898781";
+  ? ["#8a3ffc", "#1192e8", "#007d79", "#d12771", "#fa4d56", "#198038", "#4589ff", "#b28600"]
+  : ["#6929c4", "#1192e8", "#005d5d", "#9f1853", "#fa4d56", "#198038", "#002d9c", "#b28600"];
+const OTHER = "#8d8d8d";
 const STATUS_LABEL = { candidate: "候補", required: "必須", excluded: "除外" };
 const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+// Carbon のアイコン(@carbon/icons の 32px グリフ)
+const ICON_PATHS = {
+  info: '<path d="M16,2A14,14,0,1,0,30,16,14,14,0,0,0,16,2Zm0,6a1.5,1.5,0,1,1-1.5,1.5A1.5,1.5,0,0,1,16,8Zm4,16.125H12v-2.25h2.875v-5.75H13v-2.25h4.125v8H20Z"/>',
+  success: '<path d="M16,2A14,14,0,1,0,30,16,14,14,0,0,0,16,2ZM14,21.5908l-5-5L10.5906,15,14,18.4092,21.41,11l1.5957,1.5859Z"/>',
+  warning: '<path d="M16.002,6.1714h-.004L4.6487,27.9966,4.6506,28H27.3494l.0019-.0034ZM14.875,12h2.25v9h-2.25ZM16,26a1.5,1.5,0,1,1,1.5-1.5A1.5,1.5,0,0,1,16,26Z"/><path d="M29,30H3a1,1,0,0,1-.8872-1.4614l13-25a1,1,0,0,1,1.7744,0l13,25A1,1,0,0,1,29,30ZM4.6507,28H27.3493l.002-.0033L16.002,6.1714h-.004L4.6487,27.9967Z"/>',
+  error: '<path d="M16,2A13.914,13.914,0,0,0,2,16,13.914,13.914,0,0,0,16,30,13.914,13.914,0,0,0,30,16,13.914,13.914,0,0,0,16,2Zm5.4449,21L9,10.5557,10.5557,9,23,21.4448Z"/>',
+  close: '<path d="M17.4141 16 24 9.4141 22.5859 8 16 14.5859 9.4143 8 8 9.4141 14.5859 16 8 22.5859 9.4143 24 16 17.4141 22.5859 24 24 22.5859 17.4141 16z"/>',
+  search: '<path d="M29,27.5859l-7.5521-7.5521a11.0177,11.0177,0,1,0-1.4141,1.4141L27.5859,29ZM4,13a9,9,0,1,1,9,9A9.01,9.01,0,0,1,4,13Z"/>',
+  chevron: '<path d="M16 22 6 12 7.4 10.6 16 19.2 24.6 10.6 26 12z"/>',
+  trash: '<path d="M12 12H14V24H12z"/><path d="M18 12H20V24H18z"/><path d="M4,6V8H6V28a2,2,0,0,0,2,2H24a2,2,0,0,0,2-2V8h2V6ZM8,28V8H24V28Z"/><path d="M12 2H20V4H12z"/>',
+  download: '<path d="M26,24v4H6V24H4v4H4a2,2,0,0,0,2,2H26a2,2,0,0,0,2-2h0V24Z"/><path d="M26 14 24.59 12.59 17 20.17 17 2 15 2 15 20.17 7.41 12.59 6 14 16 24 26 14z"/>',
+};
+const icon = (name, cls = "ic", size = 16) =>
+  `<svg class="${cls}" viewBox="0 0 32 32" width="${size}" height="${size}" fill="currentColor" aria-hidden="true">${ICON_PATHS[name]}</svg>`;
+// Carbon のインライン通知(kind: info / success / warning / error)
+const notice = (kind, text, extraClass = "") => `<div class="cds--inline-notification cds--inline-notification--${kind} cds--inline-notification--low-contrast cds--inline-notification--hide-close-button ${extraClass}" role="${kind === "error" ? "alert" : "status"}">
+  <div class="cds--inline-notification__details">${icon(kind === "warning" ? "warning" : kind, "cds--inline-notification__icon", 20)}
+    <div class="cds--inline-notification__text-wrapper"><div class="cds--inline-notification__subtitle">${esc(text)}</div></div></div></div>`;
+const selectHtml = (attrs, options, cls = "") => `<div class="cds--select cds--select--inline ${cls}"><div class="cds--select-input__wrapper">
+  <select class="cds--select-input" ${attrs}>${options}</select>${icon("chevron", "cds--select__arrow")}</div></div>`;
 
 const state = {
   config: null,
@@ -30,6 +51,7 @@ const state = {
   resultStale: false,  // 結果の後に条件を変えたか
   showResult: true,
   vehicle: null,       // 地図で強調する車両番号(ルート最適化の結果)
+  routeLines: null,    // 車両番号 → 道路沿いの線 [[lon, lat], ...](Directions API。取得前は null)
 };
 let map = null;
 const markers = { targets: new Map(), candidates: new Map() };
@@ -60,9 +82,15 @@ async function api(path, opts = {}) {
   return data;
 }
 
-function toast(msg, ms = 2600) {
+// Carbon のトースト通知(kind: info / success / warning / error)。エラーは長めに出す
+function toast(msg, kind = "info", ms = kind === "error" || kind === "warning" ? 6000 : 2600) {
   const el = $("#toast");
-  el.textContent = msg;
+  el.innerHTML = `<div class="cds--toast-notification cds--toast-notification--${kind}" role="${kind === "error" ? "alert" : "status"}">
+    ${icon(kind, "cds--toast-notification__icon", 20)}
+    <div class="cds--toast-notification__details"><div class="cds--toast-notification__subtitle">${esc(msg)}</div></div>
+    <button class="cds--toast-notification__close-button" type="button" aria-label="閉じる">${icon("close", "cds--toast-notification__close-icon", 20)}</button>
+  </div>`;
+  $("button", el).addEventListener("click", () => (el.hidden = true));
   el.hidden = false;
   clearTimeout(toast._t);
   toast._t = setTimeout(() => (el.hidden = true), ms);
@@ -74,20 +102,26 @@ function toast(msg, ms = 2600) {
 function modal({ title, body, buttons, onOpen, validate }) {
   return new Promise((resolve) => {
     const root = $("#modal-root");
-    root.innerHTML = `<div class="modal-bg"><div class="modal" role="dialog" aria-modal="true">
-      <h2>${esc(title)}</h2><div class="body">${body}</div><div class="err"></div>
-      <div class="actions">${buttons.map((b, i) => `<button data-i="${i}" class="${b.primary ? "primary" : ""}">${esc(b.label)}</button>`).join("")}</div>
+    const kind = (b) => (b.danger ? "danger" : b.primary ? "primary" : "secondary");
+    const cancelable = buttons.some((b) => b.value === null);
+    root.innerHTML = `<div class="cds--modal is-visible" role="presentation"><div class="cds--modal-container cds--modal-container--sm" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div class="cds--modal-header"><h2 id="modal-title" class="cds--modal-header__heading">${esc(title)}</h2>
+        ${cancelable ? `<div class="cds--modal-close-button"><button class="cds--modal-close" type="button" aria-label="閉じる">${icon("close", "cds--modal-close__icon", 20)}</button></div>` : ""}</div>
+      <div class="cds--modal-content">${body}<div class="modal-err" role="alert"></div></div>
+      <div class="cds--modal-footer cds--btn-set">${buttons.map((b, i) => `<button type="button" data-i="${i}" class="cds--btn cds--btn--${kind(b)}">${esc(b.label)}</button>`).join("")}</div>
     </div></div>`;
-    const box = $(".modal", root);
+    const box = $(".cds--modal-container", root);
     const close = (v) => { root.innerHTML = ""; resolve(v); };
     $$("button[data-i]", box).forEach((btn) => btn.addEventListener("click", async () => {
       const b = buttons[+btn.dataset.i];
       if (b.value !== null && validate) {
         const err = await validate(b.value, box);
-        if (err) { $(".err", box).textContent = err; return; }
+        if (err) { $(".modal-err", box).textContent = err; return; }
       }
       close(b.value === undefined ? null : b.value);
     }));
+    const x = $(".cds--modal-close", box);
+    if (x) x.addEventListener("click", () => close(null));
     box.addEventListener("keydown", (e) => {
       if (e.key === "Escape") close(null);
       if (e.key === "Enter" && e.target.tagName === "INPUT") {
@@ -96,7 +130,7 @@ function modal({ title, body, buttons, onOpen, validate }) {
       }
     });
     if (onOpen) onOpen(box);
-    const first = $("input, textarea, select", box) || $("button.primary", box);
+    const first = $("input, textarea, select", box) || $(".cds--btn--primary, .cds--btn--danger", box);
     if (first) first.focus();
   });
 }
@@ -110,8 +144,9 @@ async function askToken(message) {
     title: "Mapbox アクセストークンの設定",
     body: `<p>${esc(message || ".env に Mapbox のアクセストークンがありません。")}</p>
       <p><a href="https://account.mapbox.com/access-tokens/" target="_blank" rel="noopener">account.mapbox.com</a> で発行した
-      <code>pk.</code> から始まるトークンを入力してください。検証後、プロジェクトの <code>.env</code> に保存します。</p>
-      <input id="token-input" placeholder="pk.eyJ..." spellcheck="false">`,
+      <code>pk.</code> から始まるトークンを入力してください。検証後、データフォルダの <code>.env</code> に保存します。</p>
+      <label class="cds--label" for="token-input">アクセストークン</label>
+      <input id="token-input" class="cds--text-input" placeholder="pk.eyJ..." spellcheck="false">`,
     buttons: [{ label: "保存して続ける", value: "save", primary: true }],
     validate: async (_, box) => {
       const token = $("#token-input", box).value.trim();
@@ -146,6 +181,7 @@ function setScenario(sc, file) {
   state.selected = null;
   state.result = null;
   state.resultJob = null;
+  state.routeLines = null;
   state.resultStale = false;
   $("#dirty-mark").hidden = true;
   renderAll();
@@ -177,7 +213,7 @@ function addPoint(kind, place) {
   renderList(kind);
   renderMarkers();
   select(kind, item.id, true);
-  toast(`${kind === "targets" ? "目的地" : "補給地点"}に追加: ${item.name}`);
+  toast(`${kind === "targets" ? "目的地" : "補給地点"}に追加: ${item.name}`, "success");
 }
 
 function removePoint(kind, id) {
@@ -207,8 +243,12 @@ function select(kind, id, fly = false) {
 // ---------------------------------------------------------------------------
 function createSearch(root) {
   const kind = root.dataset.kind;
-  root.innerHTML = `<input type="search" placeholder="${kind === "targets" ? "目的地" : "補給地点"}を検索（施設名・住所）" aria-autocomplete="list">
-    <ul class="suggest" hidden></ul>`;
+  const label = `${kind === "targets" ? "目的地" : "補給地点"}を検索（施設名・住所）`;
+  root.innerHTML = `<div class="cds--search cds--search--md" role="search">
+      ${icon("search", "cds--search-magnifier-icon")}
+      <input type="search" class="cds--search-input" placeholder="${label}" aria-label="${label}" aria-autocomplete="list">
+    </div>
+    <ul class="suggest" role="listbox" hidden></ul>`;
   const input = $("input", root);
   const list = $("ul", root);
   let session = uuid();
@@ -254,7 +294,7 @@ function createSearch(root) {
       if (s.address) place.address = s.address;
       addPoint(kind, place);
       input.value = "";
-    } catch (e) { toast(`取得に失敗しました: ${e.message}`); }
+    } catch (e) { toast(`取得に失敗しました: ${e.message}`, "error"); }
     session = uuid();   // 1 件選んだらセッションを切り替える
   }
 
@@ -285,27 +325,29 @@ function renderList(kind) {
     ol.innerHTML = `<li class="empty">まだありません。上の検索ボックスか地図のクリックで追加してください。</li>`;
     return;
   }
+  const delButton = `<button class="cds--btn cds--btn--ghost cds--btn--sm cds--btn--icon-only" data-act="del" title="削除" aria-label="削除">${icon("trash", "cds--btn__icon")}</button>`;
   ol.innerHTML = items.map((p, i) => {
     const addr = p.address || `${p.lat.toFixed(5)}, ${p.lon.toFixed(5)}`;
     if (kind === "targets") {
       return `<li class="pitem ${p.enabled ? "" : "off"}" data-id="${esc(p.id)}">
         <span class="num" title="地図で表示">${i + 1}</span>
-        <input class="pname" data-f="name" value="${esc(p.name)}" aria-label="名称">
-        <span class="pctl"><label class="en" title="計算に含める"><input type="checkbox" data-f="enabled" ${p.enabled ? "checked" : ""}>対象</label>
-          <button class="icon" data-act="del" title="削除" aria-label="削除">×</button></span>
+        <input class="cds--text-input pname" data-f="name" value="${esc(p.name)}" aria-label="名称">
+        <span class="pctl"><span class="cds--checkbox-wrapper" title="計算に含める"><input id="en-${esc(p.id)}" class="cds--checkbox" type="checkbox" data-f="enabled" ${p.enabled ? "checked" : ""}>
+            <label for="en-${esc(p.id)}" class="cds--checkbox-label"><span class="cds--checkbox-label-text">対象</span></label></span>
+          ${delButton}</span>
         <span class="paddr" title="${esc(addr)}">${esc(addr)}</span>
       </li>`;
     }
     return `<li class="pitem ${p.status === "excluded" ? "off" : ""}" data-id="${esc(p.id)}">
       <span class="num sq ${p.status}" title="地図で表示">${i + 1}</span>
-      <input class="pname" data-f="name" value="${esc(p.name)}" aria-label="名称">
-      <span class="pctl"><button class="icon" data-act="del" title="削除" aria-label="削除">×</button></span>
+      <input class="cds--text-input pname" data-f="name" value="${esc(p.name)}" aria-label="名称">
+      <span class="pctl">${delButton}</span>
       <span class="paddr" title="${esc(addr)}">${esc(addr)}</span>
       <span class="pextra">
-        <input data-f="group" value="${esc(p.group)}" placeholder="区分（例: 国交省）" list="group-options" aria-label="区分">
-        <select data-f="status" aria-label="状態">${Object.entries(STATUS_LABEL).map(([v, l]) => `<option value="${v}" ${p.status === v ? "selected" : ""}>${l}</option>`).join("")}</select>
+        <input class="cds--text-input" data-f="group" value="${esc(p.group)}" placeholder="区分（例: 国交省）" list="group-options" aria-label="区分">
+        ${selectHtml('data-f="status" aria-label="状態"', Object.entries(STATUS_LABEL).map(([v, l]) => `<option value="${v}" ${p.status === v ? "selected" : ""}>${l}</option>`).join(""))}
       </span>
-      <span class="pnote"><input data-f="note" value="${esc(p.note)}" placeholder="メモ（集合駅・レンタカーなど。報告書に載ります）" aria-label="メモ"></span>
+      <span class="pnote"><input class="cds--text-input" data-f="note" value="${esc(p.note)}" placeholder="メモ（集合駅・レンタカーなど。報告書に載ります）" aria-label="メモ"></span>
     </li>`;
   }).join("");
   if (kind === "candidates") {
@@ -364,13 +406,14 @@ function renderParams() {
   f.rt_enabled.checked = !!p.routing.enabled;
   f.rt_capacity.value = p.routing.vehicle_capacity;
   f.rt_max_deliveries.value = p.routing.max_deliveries ?? "";
+  f.rt_num_vehicles.value = p.routing.num_vehicles ?? "";
   f.rt_time_limit.value = p.routing.time_limit_sec;
   syncRoutingInputs();
 }
 
 function syncRoutingInputs() {
   const f = $("#params-form");
-  for (const n of ["rt_capacity", "rt_max_deliveries", "rt_time_limit"]) f[n].disabled = !f.rt_enabled.checked;
+  for (const n of ["rt_capacity", "rt_max_deliveries", "rt_num_vehicles", "rt_time_limit"]) f[n].disabled = !f.rt_enabled.checked;
 }
 
 function readParams() {
@@ -391,6 +434,7 @@ function readParams() {
     enabled: f.rt_enabled.checked,
     vehicle_capacity: Math.round(num(f.rt_capacity.value, 1)),
     max_deliveries: f.rt_max_deliveries.value === "" ? null : Math.round(num(f.rt_max_deliveries.value, 1)),
+    num_vehicles: f.rt_num_vehicles.value === "" ? null : Math.round(num(f.rt_num_vehicles.value, 1)),
     time_limit_sec: Math.round(num(f.rt_time_limit.value, 30)),
   };
   syncRoutingInputs();
@@ -401,7 +445,7 @@ function scheduleValidate() {
   scheduleValidate._t = setTimeout(async () => {
     try {
       const { errors } = await api("/api/validate", { method: "POST", body: state.scenario });
-      $("#validation").innerHTML = errors.map((e) => `<li>${esc(e)}</li>`).join("");
+      $("#validation").innerHTML = errors.map((e) => notice("error", e)).join("");
     } catch { /* 検証失敗は実行時に表示される */ }
   }, 300);
 }
@@ -454,8 +498,8 @@ async function onMapClick(e) {
   el.innerHTML = `<div><b>${esc(place.name)}</b></div>
     <div class="muted" style="font-size:12px">${esc(place.address && place.address !== place.name ? place.address : "")}</div>
     <div class="muted" style="font-size:11px">${place.lat.toFixed(6)}, ${place.lon.toFixed(6)}</div>
-    <div class="popup-actions"><button class="small primary" data-k="targets">目的地に追加</button>
-    <button class="small" data-k="candidates">補給地点に追加</button></div>`;
+    <div class="popup-actions"><button class="cds--btn cds--btn--primary cds--btn--sm" data-k="targets">目的地に追加</button>
+    <button class="cds--btn cds--btn--secondary cds--btn--sm" data-k="candidates">補給地点に追加</button></div>`;
   el.addEventListener("click", (ev) => {
     const b = ev.target.closest("button[data-k]");
     if (!b) return;
@@ -560,14 +604,26 @@ function renderLinks(ri) {
   src.setData({ type: "FeatureCollection", features });
 }
 
-// 車両ごとの順路: 待機拠点 → 立ち寄り順に直線で結ぶ(道路形状ではない)
+// 車両ごとの順路を道路沿いの線で取得する。届くまで(や取得に失敗した車両)は直線で描く
+async function loadRouteLines(jobId) {
+  let g;
+  try { g = await api(`/api/runs/${jobId}/geometry`); }
+  catch (e) { toast(`道路沿いのルートを取得できませんでした: ${e.message}`, "warning"); return; }
+  if (state.resultJob !== jobId) return;   // 取得中に別の結果へ切り替わった
+  state.routeLines = new Map(Object.entries(g.vehicles).filter(([, line]) => line).map(([no, line]) => [+no, line]));
+  if (g.errors.length) toast(`一部の車両は直線で表示しています: ${g.errors[0]}`, "warning");
+  renderRoutes(resultIndex());
+}
+
+// 車両ごとの順路: 待機拠点 → 立ち寄り順。道路沿いの線があればそれを、無ければ直線で結ぶ
 function renderRoutes(ri) {
   const src = map.getSource("routes");
   if (!src) return;
   const features = [];
   if (ri && ri.routing) {
     for (const v of ri.routing.vehicles) {
-      const coords = [[v.start_lon, v.start_lat], ...v.stops.map((st) => [st.lon, st.lat])];
+      const coords = (state.routeLines && state.routeLines.get(v.no))
+        || [[v.start_lon, v.start_lat], ...v.stops.map((st) => [st.lon, st.lat])];
       const sel = state.vehicle === v.no;
       features.push({
         type: "Feature",
@@ -603,7 +659,7 @@ function renderLegend(ri) {
   let html = `<div class="li"><span class="dot"></span>目的地</div>
     <div class="li"><span class="sq"></span>補給地点（緑=必須・灰=除外）</div>`;
   if (ri) {
-    html += `<div class="li muted" style="margin-top:4px">採用拠点（線は${ri.routing ? "車両の順路・直線表示" : "担当"}）</div>` +
+    html += `<div class="li muted" style="margin-top:6px">採用拠点（線は${ri.routing ? "車両の順路" : "担当"}）</div>` +
       [...ri.depots.values()].map((d) => `<div class="li"><span class="sw" style="background:${d.color}">${d.letter}</span>${esc(d.d.name)}</div>`).join("");
   }
   el.innerHTML = html;
@@ -629,18 +685,20 @@ async function runSimulation() {
     job = await api("/api/runs", { method: "POST", body: state.scenario });
   } catch (e) {
     showTab("results");
-    $("#results").innerHTML = `<div class="banner err">${esc(e.message)}</div>`;
+    $("#results").innerHTML = notice("error", e.message);
     return;
   }
   state.job = { id: job.id };
   $("#btn-run").disabled = true;
   $("#run-progress").hidden = false;
+  $("#btn-cancel").hidden = false;
   updateProgress(0, "開始");
   poll();
 }
 
 function updateProgress(frac, msg) {
-  $("#run-progress-fill").style.width = `${Math.round(frac * 100)}%`;
+  $("#run-progress-fill").style.transform = `scaleX(${Math.max(0, Math.min(frac, 1))})`;
+  $(".cds--progress-bar__track", $("#run-progress")).setAttribute("aria-valuenow", Math.round(frac * 100));
   $("#run-progress-text").textContent = `${Math.round(frac * 100)}% ${msg || ""}`;
 }
 
@@ -648,7 +706,7 @@ async function poll() {
   if (!state.job) return;
   let j;
   try { j = await api(`/api/runs/${state.job.id}`); }
-  catch (e) { finishJob(); toast(e.message); return; }
+  catch (e) { finishJob(); toast(e.message, "error"); return; }
   updateProgress(j.progress, j.message);
   if (j.status === "running") { state.job.timer = setTimeout(poll, 400); return; }
   const id = state.job.id;
@@ -657,16 +715,18 @@ async function poll() {
   if (j.status === "done") {
     state.result = j.result;
     state.resultJob = id;
+    state.routeLines = null;
     state.resultStale = false;
     state.showResult = true;
     state.vehicle = null;
     renderResults();
     renderMarkers();
     fitAll();
+    if (j.result.routing) loadRouteLines(id);
   } else if (j.status === "cancelled") {
     toast("中止しました");
   } else {
-    $("#results").innerHTML = `<div class="banner err">実行に失敗しました\n${esc(j.error)}</div>` + ($("#results").dataset.keep || "");
+    $("#results").innerHTML = notice("error", `実行に失敗しました\n${j.error}`) + ($("#results").dataset.keep || "");
   }
 }
 
@@ -675,6 +735,7 @@ function finishJob() {
   state.job = null;
   $("#btn-run").disabled = false;
   $("#run-progress").hidden = true;
+  $("#btn-cancel").hidden = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -691,54 +752,53 @@ function renderResults() {
   const rt = r.routing;
 
   box.innerHTML = `
-    ${state.resultStale ? `<div class="banner warn">この結果の後に条件や地点を変更しています。再実行すると反映されます。</div>` : ""}
-    ${r.warnings.map((w) => `<div class="banner warn">${esc(w)}</div>`).join("")}
-    <div class="muted" style="font-size:12px">${esc(r.scenario_name)} ・ ${esc(r.run_at)}</div>
+    ${state.resultStale ? notice("warning", "この結果の後に条件や地点を変更しています。再実行すると反映されます。") : ""}
+    ${r.warnings.map((w) => notice("warning", w)).join("")}
+    <div class="meta">${esc(r.scenario_name)} ・ ${esc(r.run_at)}</div>
     ${rt
       ? `<div class="hero"><span class="v">${fmt(rt.makespan_min)}</span><span class="u">分　最も遅い車両の所要時間（ルート最適化後）</span></div>
          <div class="hero-sub">選定時点（各目的地へ直行する前提）の最長は ${fmt(s.makespan_min)} 分。拠点数を増やしても直行で ${fmt(s.lower_bound_min)} 分未満にはならない（${esc(s.bottleneck_target)} がボトルネック）</div>`
       : `<div class="hero"><span class="v">${fmt(s.makespan_min)}</span><span class="u">分　最も遅い車両の所要時間</span></div>
          <div class="hero-sub">拠点数を増やしても ${fmt(s.lower_bound_min)} 分未満にはならない（${esc(s.bottleneck_target)} が最寄りの補給地点からも遠い）</div>`}
     <div class="tiles">
-      <div class="tile"><div class="k">採用拠点</div><div class="v">${s.num_depots} / ${s.num_candidates}</div></div>
-      <div class="tile"><div class="k">車両（積載 ${s.vehicle_capacity} 個）</div><div class="v">${s.num_vehicles} 台</div></div>
-      <div class="tile"><div class="k">平均所要</div><div class="v">${fmt(s.avg_min)} 分</div></div>
-      <div class="tile"><div class="k">総所要</div><div class="v">${fmt(s.total_min)} 分</div></div>
-      <div class="tile"><div class="k">解法</div><div class="v">${s.method === "exact" ? "厳密解" : "近似解"}</div></div>
-      <div class="tile"><div class="k">移動時間</div><div class="v" style="font-size:13px">${esc(r.provider)} / ${esc(profile)}</div></div>
+      <div class="cds--tile tile"><div class="k">採用拠点</div><div class="v">${s.num_depots} / ${s.num_candidates}</div></div>
+      <div class="cds--tile tile"><div class="k">車両（積載 ${s.vehicle_capacity} 個${s.fixed_fleet ? "・総数指定" : ""}）</div><div class="v">${s.num_vehicles} 台</div></div>
+      <div class="cds--tile tile"><div class="k">平均所要</div><div class="v">${fmt(s.avg_min)} 分</div></div>
+      <div class="cds--tile tile"><div class="k">総所要</div><div class="v">${fmt(s.total_min)} 分</div></div>
+      <div class="cds--tile tile"><div class="k">解法</div><div class="v">${s.method === "exact" ? "厳密解" : "近似解"}</div></div>
+      <div class="cds--tile tile"><div class="k">移動時間</div><div class="v" style="font-size:13px">${esc(r.provider)} / ${esc(profile)}</div></div>
     </div>
-    <label class="toggle"><input type="checkbox" id="toggle-result" ${state.showResult ? "checked" : ""}> 地図に結果を表示</label>
+    <div class="result-tools"><span class="cds--checkbox-wrapper"><input type="checkbox" class="cds--checkbox" id="toggle-result" ${state.showResult ? "checked" : ""}>
+      <label for="toggle-result" class="cds--checkbox-label"><span class="cds--checkbox-label-text">地図に結果を表示</span></label></span></div>
     <div class="downloads">
-      <button class="small" data-dl="docx">Word 報告書</button>
-      <button class="small" data-dl="csv">CSV（担当一覧）</button>
-      ${rt ? `<button class="small" data-dl="routes">CSV（順路）</button>` : ""}
-      <button class="small" data-dl="json">JSON（全結果）</button>
+      ${[["docx", "Word 報告書"], ["csv", "CSV（担当一覧）"], ...(rt ? [["routes", "CSV（順路）"]] : []), ["json", "JSON（全結果）"]]
+        .map(([k, l]) => `<button class="cds--btn cds--btn--ghost cds--btn--sm" data-dl="${k}">${l}${icon("download", "cds--btn__icon")}</button>`).join("")}
     </div>
 
     <h3>採用した補給地点と車両配分</h3>
-    <table class="t"><thead><tr><th>拠点</th><th class="n">機材</th><th class="n">台数</th><th class="n">最長(分)</th><th>担当</th></tr></thead><tbody>
-      ${r.depots.map((d) => `<tr class="click" data-cand="${esc(d.id)}"><td>${sw(d.id)}${esc(d.name)}${d.group ? `<div class="muted">${esc(d.group)}</div>` : ""}</td>
+    <div class="table-wrap"><table class="cds--data-table cds--data-table--sm"><thead><tr><th>拠点</th><th class="n">機材</th><th class="n">台数</th><th class="n">最長(分)</th><th>担当</th></tr></thead><tbody>
+      ${r.depots.map((d) => `<tr class="click" data-cand="${esc(d.id)}"><td>${sw(d.id)}${esc(d.name)}${d.group ? `<div class="sub">${esc(d.group)}</div>` : ""}</td>
         <td class="n">${d.stock}</td><td class="n">${d.vehicles}</td><td class="n">${fmt(d.max_min)}</td><td>${d.targets.map(esc).join(", ")}</td></tr>`).join("")}
-    </tbody></table>
+    </tbody></table></div>
 
     ${rt ? `<h3>車両ごとの順路</h3>
-      <p class="muted" style="font-size:12px;margin:0 0 6px">積載 ${rt.vehicle_capacity} 個・1 台最大 ${rt.max_deliveries} 件 ／ 探索 ${fmt(rt.elapsed_sec)} 秒。行を押すと地図でその車両を強調します。</p>
-      <table class="t"><thead><tr><th class="n">車両</th><th>待機拠点</th><th class="n">件数</th><th class="n">所要(分)</th><th>順路</th></tr></thead><tbody>
+      <p class="hint" style="margin-top:0">積載 ${rt.vehicle_capacity} 個・1 台最大 ${rt.max_deliveries} 件 ／ 探索 ${fmt(rt.elapsed_sec)} 秒。行を押すと地図でその車両を強調します。</p>
+      <div class="table-wrap"><table class="cds--data-table cds--data-table--sm"><thead><tr><th class="n">車両</th><th>待機拠点</th><th class="n">件数</th><th class="n">所要(分)</th><th>順路</th></tr></thead><tbody>
       ${rt.vehicles.map((v) => `<tr class="click${state.vehicle === v.no ? " sel" : ""}" data-vehicle="${v.no}"><td class="n">${v.no}</td><td>${sw(v.start_id)}${esc(v.start)}</td>
         <td class="n">${v.deliveries}</td><td class="n${v.time_min === rt.makespan_min ? " hl" : ""}">${fmt(v.time_min)}</td><td style="font-size:12px">${esc(routeText(v))}</td></tr>`).join("")}
-      </tbody></table>` : ""}
+      </tbody></table></div>` : ""}
 
     ${r.sensitivity.length > 1 ? `<h3>採用数ごとの最長所要時間</h3><div class="chart" id="sens-chart"></div>
-      <details><summary>表で見る</summary><table class="t"><thead><tr><th class="n">拠点数</th><th class="n">最長(分)</th><th class="n">総所要(分)</th><th>採用拠点（機材数）</th></tr></thead><tbody>
+      <details><summary>表で見る</summary><div class="table-wrap"><table class="cds--data-table cds--data-table--sm"><thead><tr><th class="n">拠点数</th><th class="n">最長(分)</th><th class="n">総所要(分)</th><th>採用拠点（機材数）</th></tr></thead><tbody>
       ${r.sensitivity.map((x) => `<tr class="${x.k === s.num_depots ? "hl" : ""}"><td class="n">${x.k}</td><td class="n">${fmt(x.makespan_min)}</td><td class="n">${fmt(x.total_min)}</td>
         <td>${x.depots.map((d) => `${esc(d.name)}(${d.stock})`).join(" / ")}</td></tr>`).join("")}
-      </tbody></table></details>` : ""}
+      </tbody></table></div></details>` : ""}
 
     <h3>目的地ごとの担当（所要時間の長い順）</h3>
-    <table class="t"><thead><tr><th>目的地</th><th>担当拠点</th><th class="n">移動</th><th class="n">所要</th></tr></thead><tbody>
+    <div class="table-wrap"><table class="cds--data-table cds--data-table--sm"><thead><tr><th>目的地</th><th>担当拠点</th><th class="n">移動</th><th class="n">所要</th></tr></thead><tbody>
       ${r.assignments.map((a) => `<tr class="click" data-target="${esc(a.target_id)}"><td>${esc(a.target)}</td><td>${sw(a.depot_id)}${esc(a.depot)}</td>
         <td class="n">${fmt(a.travel_min)}</td><td class="n">${fmt(a.time_min)}</td></tr>`).join("")}
-    </tbody></table>`;
+    </tbody></table></div>`;
 
   $("#toggle-result").addEventListener("change", (e) => { state.showResult = e.target.checked; renderMarkers(); });
   $$("[data-dl]", box).forEach((b) => b.addEventListener("click", () => download(b.dataset.dl)));
@@ -827,7 +887,7 @@ async function confirmDiscard() {
   const v = await modal({
     title: "未保存の変更があります",
     body: "<p>保存していない変更は失われます。続けますか？</p>",
-    buttons: [{ label: "キャンセル", value: null }, { label: "破棄して続ける", value: "ok", primary: true }],
+    buttons: [{ label: "キャンセル", value: null }, { label: "破棄して続ける", value: "ok", danger: true }],
   });
   return v === "ok";
 }
@@ -839,7 +899,7 @@ async function openScenario(file) {
     setScenario(r.scenario, r.file);
     await refreshScenarioList();
     try { localStorage.setItem("lastScenario", r.file); } catch { /* 保存できなくても動く */ }
-  } catch (e) { toast(e.message); }
+  } catch (e) { toast(e.message, "error"); }
 }
 
 async function save(asNew = false) {
@@ -849,7 +909,7 @@ async function save(asNew = false) {
     let name = null;   // モーダルを閉じると入力欄が消えるので validate の中で拾う
     const ok = await modal({
       title: "名前を付けて保存",
-      body: `<p>scenarios/ フォルダに JSON として保存します（CLI からも同じファイルを実行できます）。</p><input id="save-name" value="${esc(state.scenario.name)}">`,
+      body: `<p>scenarios/ フォルダに JSON として保存します（CLI からも同じファイルを実行できます）。</p><label class="cds--label" for="save-name">名前</label><input id="save-name" class="cds--text-input" value="${esc(state.scenario.name)}">`,
       buttons: [{ label: "キャンセル", value: null }, { label: "保存", value: "ok", primary: true }],
       validate: (_, box) => {
         name = $("#save-name", box).value.trim();
@@ -862,7 +922,7 @@ async function save(asNew = false) {
       const v = await modal({
         title: "上書きの確認",
         body: `<p>scenarios/${esc(existing.file)} は既にあります。上書きしますか？</p>`,
-        buttons: [{ label: "キャンセル", value: null }, { label: "上書き", value: "ok", primary: true }],
+        buttons: [{ label: "キャンセル", value: null }, { label: "上書き", value: "ok", danger: true }],
       });
       if (v !== "ok") return;
       name = existing.file;
@@ -876,8 +936,8 @@ async function save(asNew = false) {
     $("#dirty-mark").hidden = true;
     await refreshScenarioList();
     try { localStorage.setItem("lastScenario", r.file); } catch { /* 無視 */ }
-    toast(`保存しました: scenarios/${r.file}`);
-  } catch (e) { toast(`保存に失敗しました: ${e.message}`); }
+    toast(`保存しました: scenarios/${r.file}`, "success");
+  } catch (e) { toast(`保存に失敗しました: ${e.message}`, "error"); }
 }
 
 async function newScenario() {
@@ -894,7 +954,7 @@ async function importCsv(kind) {
   await modal({
     title: `${kind === "targets" ? "目的地" : "補給地点"}を CSV から取り込む`,
     body: `<p>1 行 1 件、<code>名称,緯度,経度[,住所]</code> の形式で貼り付けてください（見出し行は自動で無視）。</p>
-      <textarea id="csv-text" rows="10" placeholder="点1,36.2203,139.4971&#10;点2,36.1866,139.5126"></textarea>`,
+      <textarea id="csv-text" class="cds--text-area" rows="10" aria-label="CSV" placeholder="点1,36.2203,139.4971&#10;点2,36.1866,139.5126"></textarea>`,
     buttons: [{ label: "キャンセル", value: null }, { label: "取り込む", value: "ok", primary: true }],
     validate: (_, box) => {
       const out = [];
@@ -921,7 +981,7 @@ async function importCsv(kind) {
   renderList(kind);
   renderMarkers();
   fitAll();
-  toast(`${rows.length} 件取り込みました`);
+  toast(`${rows.length} 件取り込みました`, "success");
 }
 
 async function clearAll(kind) {
@@ -929,7 +989,7 @@ async function clearAll(kind) {
   const v = await modal({
     title: "全削除",
     body: `<p>${kind === "targets" ? "目的地" : "補給地点"} ${state.scenario[kind].length} 件をすべて削除しますか？（保存するまではファイルは変わりません）</p>`,
-    buttons: [{ label: "キャンセル", value: null }, { label: "削除", value: "ok", primary: true }],
+    buttons: [{ label: "キャンセル", value: null }, { label: "削除", value: "ok", danger: true }],
   });
   if (v !== "ok") return;
   state.scenario[kind] = [];
@@ -942,7 +1002,10 @@ async function clearAll(kind) {
 // タブ・全体描画
 // ---------------------------------------------------------------------------
 function showTab(name) {
-  $$(".tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
+  $$(".tabs button").forEach((b) => {
+    b.classList.toggle("cds--tabs__nav-item--selected", b.dataset.tab === name);
+    b.setAttribute("aria-selected", b.dataset.tab === name);
+  });
   $$(".panel").forEach((p) => (p.hidden = p.dataset.panel !== name));
   if (name === "results" && state.result && state.result.sensitivity.length > 1) {
     const el = $("#sens-chart");
@@ -1008,5 +1071,5 @@ async function init() {
 }
 
 init().catch((e) => {
-  document.body.insertAdjacentHTML("afterbegin", `<div class="banner err" style="margin:8px">起動に失敗しました: ${esc(e.message)}</div>`);
+  document.body.insertAdjacentHTML("afterbegin", notice("error", `起動に失敗しました: ${e.message}`));
 });

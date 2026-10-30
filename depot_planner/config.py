@@ -1,26 +1,61 @@
 # -*- coding: utf-8 -*-
 """パスと Mapbox アクセストークンの管理。
 
-トークンは 環境変数 → プロジェクト直下の .env の順に探す。
+トークンは 環境変数 → データフォルダの .env の順に探す。
 キー名は MAPBOX_ACCESS_TOKEN(旧プロジェクト互換で NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN も読む)。
 見つからなければ CLI はターミナルで、GUI は画面上のダイアログで入力させ、
 検証してから .env に保存する。
+
+データ(.env / scenarios / runs / cache)の置き場所:
+    ソースから実行  … プロジェクト直下(従来どおり)
+    パッケージ版    … ユーザーのデータフォルダ
+                      Windows: %APPDATA%\\depot-planner
+                      macOS:   ~/Library/Application Support/depot-planner
+    環境変数 DEPOT_PLANNER_HOME を指定するとそちらを優先する。
 """
 
 import getpass
 import json
 import os
+import shutil
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
+APP_NAME = "depot-planner"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-ENV_PATH = PROJECT_ROOT / ".env"
-SCENARIO_DIR = PROJECT_ROOT / "scenarios"
-RUNS_DIR = PROJECT_ROOT / "runs"
-CACHE_PATH = PROJECT_ROOT / "cache" / "travel_times.json"
+# PyInstaller などで固めた実行ファイルか(同梱ファイルは sys._MEIPASS 配下に展開される)
+FROZEN = bool(getattr(sys, "frozen", False))
+BUNDLE_ROOT = Path(getattr(sys, "_MEIPASS", PROJECT_ROOT))
+
+
+def user_data_dir():
+    if sys.platform == "win32":
+        base = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming")
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+    else:
+        base = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+    return base / APP_NAME
+
+
+DATA_ROOT = Path(os.environ.get("DEPOT_PLANNER_HOME") or (user_data_dir() if FROZEN else PROJECT_ROOT))
+ENV_PATH = DATA_ROOT / ".env"
+SCENARIO_DIR = DATA_ROOT / "scenarios"
+RUNS_DIR = DATA_ROOT / "runs"
+CACHE_PATH = DATA_ROOT / "cache" / "travel_times.json"
+BUNDLED_SCENARIO_DIR = BUNDLE_ROOT / "scenarios"
+
+
+def ensure_data_dir():
+    """データフォルダを作る。シナリオが 1 つも無ければ同梱のサンプルをコピーする。"""
+    SCENARIO_DIR.mkdir(parents=True, exist_ok=True)
+    if BUNDLED_SCENARIO_DIR.resolve() == SCENARIO_DIR.resolve() or any(SCENARIO_DIR.glob("*.json")):
+        return
+    for src in BUNDLED_SCENARIO_DIR.glob("*.json"):
+        shutil.copy2(src, SCENARIO_DIR / src.name)
 
 TOKEN_KEY = "MAPBOX_ACCESS_TOKEN"
 TOKEN_KEYS = (TOKEN_KEY, "NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN")
@@ -60,6 +95,7 @@ def get_token(env_path=ENV_PATH):
 def save_token(token, env_path=ENV_PATH):
     """.env の MAPBOX_ACCESS_TOKEN 行を書き換える(他の行はそのまま残す)。"""
     env_path = Path(env_path)
+    env_path.parent.mkdir(parents=True, exist_ok=True)
     lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
     out, replaced = [], False
     for line in lines:
