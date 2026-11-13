@@ -14,6 +14,8 @@
   --target: #0f62fe;     /* blue 60 */
   --required: #198038;   /* green 60 */
   --excluded: #8d8d8d;   /* gray 50 */
+  --preferred: #1192e8;  /* cyan 50 */
+  --avoid: #eb6200;      /* orange 50 */
   --candidate: #525252;  /* gray 70 */
   --font: "IBM Plex Sans", "IBM Plex Sans JP", system-ui, -apple-system, "Segoe UI", "Yu Gothic UI", "Meiryo", sans-serif;
 }
@@ -107,6 +109,8 @@ code { font-family: "IBM Plex Mono", ui-monospace, Consolas, monospace; font-siz
 .pitem .num.sq { border-radius: 2px; background: var(--candidate); }
 .pitem .num.sq.required { background: var(--required); }
 .pitem .num.sq.excluded { background: var(--excluded); }
+.pitem .num.sq.preferred { background: var(--preferred); }
+.pitem .num.sq.avoid { background: var(--avoid); }
 .pitem .pname { background: transparent; border-bottom-color: transparent; font-weight: 600; padding-inline: 8px; }
 .pitem .pname:hover, .pitem .pname:focus { background: var(--cds-field-02); border-bottom-color: var(--cds-border-strong-01); }
 .pitem .paddr { grid-column: 2 / 4; color: var(--cds-text-secondary); font-size: 12px; padding: 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
@@ -179,6 +183,8 @@ details summary { cursor: pointer; color: var(--cds-link-primary); font-size: 12
 .mk.cand { border-radius: 2px; background: var(--candidate); width: 22px; height: 22px; }
 .mk.cand.required { background: var(--required); }
 .mk.cand.excluded { background: var(--excluded); opacity: .6; }
+.mk.cand.preferred { background: var(--preferred); }
+.mk.cand.avoid { background: var(--avoid); }
 .mk.cand.adopted { width: 30px; height: 30px; font-size: 13px; z-index: 2; }
 .mk.sel { outline: 2px solid var(--cds-focus); outline-offset: 2px; }
 .mk.dim { opacity: .35; }

@@ -72,6 +72,8 @@ def cmd_run(a):
     sc = scn.load(path)
     if a.k:
         sc["params"]["num_depots"] = a.k
+    if a.margin is not None:
+        sc["params"]["preference_margin_min"] = a.margin
     rt = sc["params"]["routing"]
     if a.no_routing:
         rt["enabled"] = False
@@ -196,6 +198,8 @@ def main(argv=None):
     r = sub.add_parser("run", help="シナリオを実行")
     r.add_argument("scenario", help="シナリオの JSON パス、または scenarios/ 内の名前")
     r.add_argument("--k", type=int, help="採用数を一時的に上書き")
+    r.add_argument("--margin", type=float, metavar="MIN",
+                   help="優先 / なるべく避ける の許容幅[分]を一時的に上書き")
     r.add_argument("--capacity", type=int, metavar="N", help="1 台に積み込める機材の数を一時的に上書き")
     r.add_argument("--max-deliveries", type=int, metavar="N",
                    help="1 台あたりの配送件数上限(積載量より大きくすると積み直しを許す)")

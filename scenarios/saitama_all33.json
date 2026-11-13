@@ -1,7 +1,7 @@
 {
   "version": 1,
   "name": "埼玉 全33地点(route_calcurate から移行)",
-  "description": "route_calcurate/simulate_all33.py と同じ条件。江戸川・荒川の河川事務所と国立女性教育会館は除外。",
+  "description": "route_calcurate/simulate_all33.py と同じ条件。江戸川・荒川の河川事務所と国立女性教育会館は除外。 最初に設定した補給地点(実績)を優先、レンタルスペースはなるべく避ける(許容幅 +10 分)。",
   "targets": [
     {
       "id": "T01",
@@ -309,7 +309,7 @@
       "lon": 139.45369,
       "address": "埼玉県川越市鯨井中野台2100",
       "group": "実績",
-      "status": "candidate",
+      "status": "preferred",
       "note": "駅: 東武 鶴ヶ島駅(徒歩14分) / レンタカー: トヨタレンタカー坂戸駅前店(坂戸駅北口徒歩2分)"
     },
     {
@@ -319,7 +319,7 @@
       "lon": 139.695511,
       "address": "埼玉県久喜市栗橋北1丁目17-6",
       "group": "実績",
-      "status": "candidate",
+      "status": "preferred",
       "note": "駅: JR/東武 栗橋駅(至近) / レンタカー: 駅徒歩圏に大手なし。トヨタ/ニッポン久喜店(2駅先)"
     },
     {
@@ -329,7 +329,7 @@
       "lon": 139.510208,
       "address": "埼玉県羽生市大字上新郷7066",
       "group": "実績",
-      "status": "candidate",
+      "status": "preferred",
       "note": "駅: 東武 羽生駅から約6km / レンタカー: ニコニコレンタカー羽生駅南店(羽生駅徒歩3分)"
     },
     {
@@ -339,7 +339,7 @@
       "lon": 139.560028,
       "address": "埼玉県加須市上種足914",
       "group": "実績",
-      "status": "candidate",
+      "status": "preferred",
       "note": "駅: 鉄道駅なし(鴻巣駅/加須駅から朝日バス15分) / レンタカー: ニッポンレンタカー鴻巣/トヨタレンタカー加須店"
     },
     {
@@ -469,7 +469,7 @@
       "lon": 139.460355,
       "address": "埼玉県行田市下忍438",
       "group": "レンタルスペース",
-      "status": "candidate",
+      "status": "avoid",
       "note": "駅: 秩父鉄道 行田市駅から約4km(徒歩圏外) / カバー: 点4・8・11（国道17号熊谷バイパス沿い。2400平米・大型駐車場あり）"
     },
     {
@@ -479,7 +479,7 @@
       "lon": 139.219009,
       "address": "埼玉県深谷市小前田304-2",
       "group": "レンタルスペース",
-      "status": "candidate",
+      "status": "avoid",
       "note": "駅: 秩父鉄道 小前田駅(約1km) / カバー: 点3・30（関越道 花園IC至近。駐車場完備）"
     },
     {
@@ -489,7 +489,7 @@
       "lon": 139.655823,
       "address": "埼玉県蓮田市西新宿1-43-1",
       "group": "レンタルスペース",
-      "status": "candidate",
+      "status": "avoid",
       "note": "駅: JR宇都宮線 蓮田駅から約3km / カバー: 点19・22・23（駐車場完備）"
     },
     {
@@ -585,6 +585,7 @@
       "min": 3,
       "max": 10
     },
-    "max_exact_combinations": 5000000
+    "max_exact_combinations": 5000000,
+    "preference_margin_min": 10
   }
 }
