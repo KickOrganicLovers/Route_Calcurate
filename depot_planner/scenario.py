@@ -9,7 +9,7 @@ GUI も CLI も同じ scenarios/*.json を読み書きする。書式:
   "description": "",
   "targets":    [{"id", "name", "lat", "lon", "address", "enabled", "note", "mapbox_id"}],
   "candidates": [{"id", "name", "lat", "lon", "address", "group",
-                  "status": "candidate" | "required" | "excluded", "note", "mapbox_id"}],
+                  "status": "candidate" | "required" | "preferred" | "avoid" | "excluded", "note", "mapbox_id"}],
   "params": {...}   # DEFAULT_PARAMS 参照
 }
 """
@@ -24,8 +24,9 @@ from .mapbox_api import PROFILES
 from .solver import OBJECTIVES
 from .travel_times import PROVIDERS
 
-STATUSES = ("candidate", "required", "excluded")
-STATUS_LABEL = {"candidate": "候補", "required": "必須", "excluded": "除外"}
+STATUSES = ("candidate", "required", "preferred", "avoid", "excluded")
+STATUS_LABEL = {"candidate": "候補", "required": "必須", "preferred": "優先",
+                "avoid": "なるべく避ける", "excluded": "除外"}
 
 DEFAULT_PARAMS = {
     "num_depots": 5,            # 採用する補給地点の数
@@ -34,6 +35,7 @@ DEFAULT_PARAMS = {
     "profile": "driving",       # driving / driving-traffic / walking / cycling
     "provider": "mapbox",       # mapbox / osrm / auto
     "objective": "makespan",    # makespan(最遅車両を最小化) / total(総所要を最小化)
+    "preference_margin_min": 10.0,  # 優先 / なるべく避ける のために許す悪化幅[分]
     "sensitivity": {"enabled": True, "min": 1, "max": 10},
     "max_exact_combinations": 5_000_000,
     # 2 段目: 配分ルート最適化(OR-Tools)
@@ -124,7 +126,7 @@ def validate(sc):
         errors.append("OSRM は driving のみ対応です")
     if p.get("objective") not in OBJECTIVES:
         errors.append(f"目的関数は {OBJECTIVES} のいずれか")
-    for key in ("service_min", "reload_min"):
+    for key in ("service_min", "reload_min", "preference_margin_min"):
         if not isinstance(p.get(key), (int, float)) or p[key] < 0:
             errors.append(f"{key} は 0 以上の数値にしてください")
     rt = p.get("routing") or {}

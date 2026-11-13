@@ -19,7 +19,8 @@ from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor
 
 from . import config
-from .runner import route_text
+from .scenario import STATUS_LABEL
+from .runner import preference_text, route_text
 
 HEADER_FILL = "365F91"
 TOTAL_FILL = "D9D9D9"
@@ -137,22 +138,28 @@ def to_docx(result, path):
         f"移動時間: {result['provider']}（{PROFILE_LABEL.get(p['profile'], p['profile'])}、道路ネットワーク上の所要時間）。",
         f"作業時間: 目的地での作業 {p['service_min']} 分／補給地点での積込 {p['reload_min']} 分。",
         f"目的関数: {OBJECTIVE_LABEL[p['objective']]}。",
+        *([f"優先 / なるべく避ける: 最良の組合せとの差が {p['preference_margin_min']:g} 分以内なら、"
+           "「優先」の補給地点を多く・「なるべく避ける」の補給地点を少なく採る組合せを選ぶ。"]
+          if result.get("preference") else []),
         f"探索: {'全組合せの総当たり（厳密解）' if s['method'] == 'exact' else '貪欲法＋入替え探索（近似解）'}"
         f"。組合せ数 {s['combinations']:,}。",
     ]:
         doc.add_paragraph(line, style="List Bullet")
 
     doc.add_heading("1. 補給地点 候補リスト（全件）", level=1)
-    _table(doc, ["採否", "区分", "名称", "緯度", "経度", "所在地"],
-           [[c["result"], c["group"] or "-", c["name"], f"{c['lat']:.6f}", f"{c['lon']:.6f}",
-             c["address"] or "-"] for c in result["candidates"]],
+    _table(doc, ["採否", "状態", "区分", "名称", "緯度", "経度", "所在地"],
+           [[c["result"], STATUS_LABEL.get(c["status"], c["status"]), c["group"] or "-", c["name"],
+             f"{c['lat']:.6f}", f"{c['lon']:.6f}", c["address"] or "-"]
+            for c in result["candidates"]],
            fills=[fill_of[c["group"]] for c in result["candidates"]],
-           widths=[40, 62, 118, 58, 62, 140])
+           widths=[36, 48, 58, 112, 54, 58, 114])
 
     doc.add_heading("2. シミュレーション結果：採用した補給地点と車両配分", level=1)
     para = doc.add_paragraph()
     run = para.add_run(f"最長所要時間{s['makespan_min']}分")
     run.bold, run.underline, run.font.size = True, True, Pt(14)
+    if result.get("preference"):
+        doc.add_paragraph(preference_text(result["preference"], p["objective"]))
     rows = [[d["name"], d["group"] or "-", f"{d['stock']} 個", f"{d['vehicles']} 台",
              d["max_min"], ", ".join(d["targets"])] for d in result["depots"]]
     rows.append(["合計", "", f"{s['num_targets']} 個", f"{s['num_vehicles']} 台",

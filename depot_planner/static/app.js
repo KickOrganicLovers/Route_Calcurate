@@ -15,8 +15,16 @@ const SERIES = DARK
   ? ["#8a3ffc", "#1192e8", "#007d79", "#d12771", "#fa4d56", "#198038", "#4589ff", "#b28600"]
   : ["#6929c4", "#1192e8", "#005d5d", "#9f1853", "#fa4d56", "#198038", "#002d9c", "#b28600"];
 const OTHER = "#8d8d8d";
-const STATUS_LABEL = { candidate: "候補", required: "必須", excluded: "除外" };
+const STATUS_LABEL = { candidate: "候補", required: "必須", preferred: "優先", avoid: "なるべく避ける", excluded: "除外" };
 const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const MAP_STYLES = {
+  streets: { label: "道路", url: "mapbox://styles/mapbox/streets-v12" },
+  outdoors: { label: "アウトドア", url: "mapbox://styles/mapbox/outdoors-v12" },
+  light: { label: "淡色", url: "mapbox://styles/mapbox/light-v11" },
+  dark: { label: "ダーク", url: "mapbox://styles/mapbox/dark-v11" },
+  satelliteStreets: { label: "航空写真＋道路", url: "mapbox://styles/mapbox/satellite-streets-v12" },
+  satellite: { label: "航空写真", url: "mapbox://styles/mapbox/satellite-v9" },
+};
 
 // Carbon のアイコン(@carbon/icons の 32px グリフ)
 const ICON_PATHS = {
@@ -54,6 +62,7 @@ const state = {
   routeLines: null,    // 車両番号 → 道路沿いの線 [[lon, lat], ...](Directions API。取得前は null)
 };
 let map = null;
+let activeMapStyle = DARK ? "dark" : "streets";
 const markers = { targets: new Map(), candidates: new Map() };
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -395,6 +404,7 @@ function renderParams() {
   f.description.value = sc.description || "";
   f.num_depots.value = p.num_depots;
   f.objective.value = p.objective;
+  f.preference_margin_min.value = p.preference_margin_min;
   f.service_min.value = p.service_min;
   f.reload_min.value = p.reload_min;
   f.profile.value = p.profile;
@@ -424,6 +434,7 @@ function readParams() {
   sc.description = f.description.value;
   p.num_depots = Math.round(num(f.num_depots.value, p.num_depots));
   p.objective = f.objective.value;
+  p.preference_margin_min = num(f.preference_margin_min.value, 10);
   p.service_min = num(f.service_min.value, 0);
   p.reload_min = num(f.reload_min.value, 0);
   p.profile = f.profile.value;
@@ -453,23 +464,28 @@ function scheduleValidate() {
 // ---------------------------------------------------------------------------
 // 地図
 // ---------------------------------------------------------------------------
-function initMap(token) {
-  mapboxgl.accessToken = token;
-  map = new mapboxgl.Map({
-    container: "map",
-    style: DARK ? "mapbox://styles/mapbox/dark-v11" : "mapbox://styles/mapbox/streets-v12",
-    center: [139.55, 36.05], zoom: 8.5, language: "ja",
-  });
-  map.addControl(new mapboxgl.NavigationControl(), "top-right");
-  map.addControl(new mapboxgl.ScaleControl(), "bottom-right");
-  map.on("load", () => {
+function changeMapStyle(styleId) {
+  if (!Object.hasOwn(MAP_STYLES, styleId) || styleId === activeMapStyle) return;
+  activeMapStyle = styleId;
+  try { localStorage.setItem("mapStyle", activeMapStyle); } catch { /* 保存できなくても動く */ }
+  if (map) map.setStyle(MAP_STYLES[activeMapStyle].url);
+}
+
+function addMapLayers() {
+  if (!map.getSource("links")) {
     map.addSource("links", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+  }
+  if (!map.getLayer("links")) {
     map.addLayer({
       id: "links", type: "line", source: "links",
       paint: { "line-color": ["get", "color"], "line-width": 2, "line-opacity": 0.75 },
       layout: { "line-cap": "round" },
     });
+  }
+  if (!map.getSource("routes")) {
     map.addSource("routes", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+  }
+  if (!map.getLayer("routes")) {
     map.addLayer({
       id: "routes", type: "line", source: "routes",
       paint: {
@@ -479,6 +495,23 @@ function initMap(token) {
       },
       layout: { "line-cap": "round", "line-join": "round", "line-sort-key": ["case", ["get", "sel"], 1, 0] },
     });
+  }
+}
+
+function initMap(token) {
+  mapboxgl.accessToken = token;
+  map = new mapboxgl.Map({
+    container: "map",
+    style: MAP_STYLES[activeMapStyle].url,
+    center: [139.55, 36.05], zoom: 8.5, language: "ja",
+  });
+  map.addControl(new mapboxgl.NavigationControl(), "top-right");
+  map.addControl(new mapboxgl.ScaleControl(), "bottom-right");
+  map.on("style.load", () => {
+    addMapLayers();
+    renderLinks(resultIndex());
+  });
+  map.on("load", () => {
     renderMarkers();
     fitAll();
   });
@@ -648,6 +681,14 @@ function selectVehicle(no) {
   }
 }
 
+function preferenceText(pf, objective) {
+  const what = objective === "makespan" ? "最長所要" : "総所要";
+  const head = `優先 ${pf.num_preferred_used}/${pf.num_preferred} 件・なるべく避ける ${pf.num_avoid_used}/${pf.num_avoid} 件を採用（許容幅 +${fmt(pf.margin_min)} 分）。`;
+  return pf.delta_min > 0
+    ? `${head}優先などを考慮しない最良は${what} ${fmt(pf.best_min)} 分で、考慮したことで +${fmt(pf.delta_min)} 分の ${fmt(pf.chosen_min)} 分になりました。`
+    : `${head}優先などを考慮しない場合と${what}は同じ（${fmt(pf.chosen_min)} 分）です。`;
+}
+
 function routeText(v) {
   return v.stops.map((st) => st.kind === "pickup"
     ? `補(${st.name})${st.count > 1 ? "×" + st.count : ""}`
@@ -657,7 +698,7 @@ function routeText(v) {
 function renderLegend(ri) {
   const el = $("#map-legend");
   let html = `<div class="li"><span class="dot"></span>目的地</div>
-    <div class="li"><span class="sq"></span>補給地点（緑=必須・灰=除外）</div>`;
+    <div class="li"><span class="sq"></span>補給地点（緑=必須・水色=優先・橙=なるべく避ける・灰=除外）</div>`;
   if (ri) {
     html += `<div class="li muted" style="margin-top:6px">採用拠点（線は${ri.routing ? "車両の順路" : "担当"}）</div>` +
       [...ri.depots.values()].map((d) => `<div class="li"><span class="sw" style="background:${d.color}">${d.letter}</span>${esc(d.d.name)}</div>`).join("");
@@ -754,6 +795,7 @@ function renderResults() {
   box.innerHTML = `
     ${state.resultStale ? notice("warning", "この結果の後に条件や地点を変更しています。再実行すると反映されます。") : ""}
     ${r.warnings.map((w) => notice("warning", w)).join("")}
+    ${r.preference ? notice("info", preferenceText(r.preference, p.objective)) : ""}
     <div class="meta">${esc(r.scenario_name)} ・ ${esc(r.run_at)}</div>
     ${rt
       ? `<div class="hero"><span class="v">${fmt(rt.makespan_min)}</span><span class="u">分　最も遅い車両の所要時間（ルート最適化後）</span></div>
@@ -1024,6 +1066,7 @@ function renderAll() {
 
 function bindUi() {
   $$(".tabs button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
+  $("#map-style-select").addEventListener("change", (e) => changeMapStyle(e.target.value));
   $$(".search").forEach(createSearch);
   bindList("targets");
   bindList("candidates");
@@ -1051,6 +1094,12 @@ function bindUi() {
 
 async function init() {
   bindUi();
+  try {
+    const savedMapStyle = localStorage.getItem("mapStyle");
+    if (Object.hasOwn(MAP_STYLES, savedMapStyle)) activeMapStyle = savedMapStyle;
+    else if (savedMapStyle === "auto") activeMapStyle = DARK ? "dark" : "streets";
+  } catch { /* 無視 */ }
+  $("#map-style-select").value = activeMapStyle;
   state.config = await api("/api/config");
   let token = state.config.token;
   if (!state.config.token_configured) token = await askToken();

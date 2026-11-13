@@ -43,6 +43,9 @@ def run_scenario(sc, progress=None, cancel=None, allow_fetch=True):
     targets = [t for t in sc["targets"] if t.get("enabled", True)]
     cands = [c for c in sc["candidates"] if c["status"] != "excluded"]
     required = [i for i, c in enumerate(cands) if c["status"] == "required"]
+    preferred = [i for i, c in enumerate(cands) if c["status"] == "preferred"]
+    avoid = [i for i, c in enumerate(cands) if c["status"] == "avoid"]
+    margin = float(p["preference_margin_min"])
 
     # 1. 所要時間
     if progress:
@@ -74,6 +77,7 @@ def run_scenario(sc, progress=None, cancel=None, allow_fetch=True):
     for n, k in enumerate(ks):
         runs[k] = solve(cost, k, required=required, objective=p["objective"],
                         max_exact=int(p["max_exact_combinations"]),
+                        preferred=preferred, avoid=avoid, margin=margin,
                         progress=_stage(progress, sel_lo + (sel_hi - sel_lo) * n / len(ks),
                                         sel_lo + (sel_hi - sel_lo) * (n + 1) / len(ks)),
                         cancel=cancel)
@@ -83,6 +87,19 @@ def run_scenario(sc, progress=None, cancel=None, allow_fetch=True):
     if main["method"] == "heuristic":
         warnings.append(f"組合せ数 {main['combinations']:,} が上限を超えたため近似解です"
                         "(max_exact_combinations を上げると厳密解になります)")
+
+    best_primary = round(main["best_primary"], 1)
+    chosen_primary = main["makespan"] if p["objective"] == "makespan" else main["total"]
+    preference = None
+    if preferred or avoid:
+        preference = {
+            "margin_min": margin,
+            "best_min": best_primary,
+            "chosen_min": round(chosen_primary, 1),
+            "delta_min": round(chosen_primary - main["best_primary"], 1),
+            "num_preferred": len(preferred), "num_preferred_used": main["num_preferred"],
+            "num_avoid": len(avoid), "num_avoid_used": main["num_avoided"],
+        }
 
     # 3. 結果の整形
     by_depot = {i: [] for i in main["subset"]}
@@ -171,6 +188,7 @@ def run_scenario(sc, progress=None, cancel=None, allow_fetch=True):
         "assignments": assignments,
         "candidates": candidates,
         "sensitivity": sensitivity,
+        "preference": preference,
         "routing": routing,
         "warnings": warnings,
     }
@@ -239,6 +257,18 @@ def route_text(v):
     return " → ".join(parts)
 
 
+def preference_text(pf, objective="makespan"):
+    """優先 / なるべく避ける の反映状況を 1 文で表す。"""
+    what = "最長所要" if objective == "makespan" else "総所要"
+    head = (f"優先 {pf['num_preferred_used']}/{pf['num_preferred']} 件・"
+            f"なるべく避ける {pf['num_avoid_used']}/{pf['num_avoid']} 件を採用"
+            f"(許容幅 +{pf['margin_min']:g} 分)。")
+    if pf["delta_min"] > 0:
+        return (head + f"優先などを考慮しない最良は{what} {pf['best_min']} 分で、"
+                f"考慮したことで +{pf['delta_min']} 分の {pf['chosen_min']} 分になった。")
+    return head + f"優先などを考慮しない場合と{what}は同じ({pf['chosen_min']} 分)。"
+
+
 def format_text(result):
     """CLI 表示用のテキスト。"""
     s = result["summary"]
@@ -258,6 +288,11 @@ def format_text(result):
         f"最長所要 {s['makespan_min']} 分 / 総所要 {s['total_min']} 分 / 平均 {s['avg_min']} 分",
         f"(拠点数を増やしても最長所要は {s['lower_bound_min']} 分未満にならない: "
         f"{s['bottleneck_target']} がボトルネック)",
+    ]
+    pf = result.get("preference")
+    if pf:
+        lines.append(preference_text(pf, p["objective"]))
+    lines += [
         "",
         "--- 採用した補給地点 ---",
     ]

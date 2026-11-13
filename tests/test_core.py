@@ -50,6 +50,58 @@ def test_heuristic_is_close(cost):
     assert heur["makespan"] <= exact["makespan"] * 1.25
 
 
+def _brute_pref(cost, k, pref, avoid, margin, required=(), objective="makespan"):
+    """優先 / なるべく避ける の定義どおりに総当たりで選ぶ。"""
+    w = np.zeros(cost.shape[0], dtype=int)
+    w[list(pref)], w[list(avoid)] = 1, -1
+    rows = []
+    for sub in combinations([i for i in range(cost.shape[0]) if i not in required],
+                            k - len(required)):
+        s = list(required) + list(sub)
+        rows.append((solver._key(cost, s, objective), solver._pref_counts(cost, s, w)))
+    best = min(r[0][0] for r in rows)
+    ok = [r for r in rows if r[0][0] <= best + margin + 1e-9]
+    key, (np_, na) = min(ok, key=lambda r: (-r[1][0], r[1][1], r[0]))
+    return key, np_, na, best
+
+
+@pytest.mark.parametrize("objective", solver.OBJECTIVES)
+@pytest.mark.parametrize("margin", [0, 3, 10, 1000])
+@pytest.mark.parametrize("required", [(), (7,)])
+def test_preferred_and_avoid_match_naive(cost, margin, objective, required):
+    pref, avoid = [0, 4, 9], [1, 2, 11]
+    r = solver.solve(cost, 4, objective=objective, preferred=pref, avoid=avoid,
+                     margin=margin, required=required)
+    key, np_, na, best = _brute_pref(cost, 4, pref, avoid, margin, required, objective)
+    got = (r["makespan"], r["total"]) if objective == "makespan" else (r["total"], r["makespan"])
+    assert got == pytest.approx(key)
+    assert (r["num_preferred"], r["num_avoided"]) == (np_, na)
+    assert r["best_primary"] == pytest.approx(best)
+    assert got[0] <= best + margin + 1e-9
+
+
+def test_preferred_margin_trades_time(cost):
+    plain = solver.solve(cost, 3)
+    # 最良解に入っていない拠点を優先にすると、許容幅が大きければ採用される
+    other = next(i for i in range(12) if i not in plain["subset"])
+    tight = solver.solve(cost, 3, preferred=[other], margin=0)
+    loose = solver.solve(cost, 3, preferred=[other], margin=1000)
+    assert tight["makespan"] == pytest.approx(plain["makespan"])
+    assert other in loose["subset"] and loose["num_preferred"] == 1
+    # なるべく避ける: 最良解の拠点を避けると、許容幅が大きければ外れる
+    av = plain["subset"][0]
+    r = solver.solve(cost, 3, avoid=[av], margin=1000)
+    assert r["num_avoided"] == 0
+
+
+def test_heuristic_respects_preference(cost):
+    other = next(i for i in range(12) if i not in solver.solve(cost, 4)["subset"])
+    r = solver.solve(cost, 4, max_exact=1, preferred=[other], margin=1000)
+    assert r["method"] == "heuristic" and r["num_preferred"] == 1
+    r = solver.solve(cost, 4, max_exact=1, preferred=[other], margin=0)
+    assert r["makespan"] <= r["best_primary"] + 1e-9
+
+
 def test_errors(cost):
     with pytest.raises(ValueError):
         solver.solve(cost, 3, required=[0, 1, 2, 3])
