@@ -157,6 +157,20 @@
 
   <div class="map-wrap">
     <div id="map"></div>
+    <div class="cds--select map-style-select">
+      <label class="cds--label" for="map-style-select">地図デザイン</label>
+      <div class="cds--select-input__wrapper">
+        <select id="map-style-select" class="cds--select-input" aria-label="背景地図デザイン">
+          <option value="streets">道路</option>
+          <option value="outdoors">アウトドア</option>
+          <option value="light">淡色</option>
+          <option value="dark">ダーク</option>
+          <option value="satelliteStreets">航空写真＋道路</option>
+          <option value="satellite">航空写真</option>
+        </select>
+        <svg class="cds--select__arrow" viewBox="0 0 32 32" width="16" height="16" aria-hidden="true"><path d="M16 22 6 12 7.4 10.6 16 19.2 24.6 10.6 26 12z"/></svg>
+      </div>
+    </div>
     <div class="map-legend" id="map-legend"></div>
   </div>
 </main>

@@ -17,6 +17,14 @@ const SERIES = DARK
 const OTHER = "#8d8d8d";
 const STATUS_LABEL = { candidate: "候補", required: "必須", preferred: "優先", avoid: "なるべく避ける", excluded: "除外" };
 const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const MAP_STYLES = {
+  streets: { label: "道路", url: "mapbox://styles/mapbox/streets-v12" },
+  outdoors: { label: "アウトドア", url: "mapbox://styles/mapbox/outdoors-v12" },
+  light: { label: "淡色", url: "mapbox://styles/mapbox/light-v11" },
+  dark: { label: "ダーク", url: "mapbox://styles/mapbox/dark-v11" },
+  satelliteStreets: { label: "航空写真＋道路", url: "mapbox://styles/mapbox/satellite-streets-v12" },
+  satellite: { label: "航空写真", url: "mapbox://styles/mapbox/satellite-v9" },
+};
 
 // Carbon のアイコン(@carbon/icons の 32px グリフ)
 const ICON_PATHS = {
@@ -54,6 +62,7 @@ const state = {
   routeLines: null,    // 車両番号 → 道路沿いの線 [[lon, lat], ...](Directions API。取得前は null)
 };
 let map = null;
+let activeMapStyle = DARK ? "dark" : "streets";
 const markers = { targets: new Map(), candidates: new Map() };
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -455,23 +464,28 @@ function scheduleValidate() {
 // ---------------------------------------------------------------------------
 // 地図
 // ---------------------------------------------------------------------------
-function initMap(token) {
-  mapboxgl.accessToken = token;
-  map = new mapboxgl.Map({
-    container: "map",
-    style: DARK ? "mapbox://styles/mapbox/dark-v11" : "mapbox://styles/mapbox/streets-v12",
-    center: [139.55, 36.05], zoom: 8.5, language: "ja",
-  });
-  map.addControl(new mapboxgl.NavigationControl(), "top-right");
-  map.addControl(new mapboxgl.ScaleControl(), "bottom-right");
-  map.on("load", () => {
+function changeMapStyle(styleId) {
+  if (!Object.hasOwn(MAP_STYLES, styleId) || styleId === activeMapStyle) return;
+  activeMapStyle = styleId;
+  try { localStorage.setItem("mapStyle", activeMapStyle); } catch { /* 保存できなくても動く */ }
+  if (map) map.setStyle(MAP_STYLES[activeMapStyle].url);
+}
+
+function addMapLayers() {
+  if (!map.getSource("links")) {
     map.addSource("links", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+  }
+  if (!map.getLayer("links")) {
     map.addLayer({
       id: "links", type: "line", source: "links",
       paint: { "line-color": ["get", "color"], "line-width": 2, "line-opacity": 0.75 },
       layout: { "line-cap": "round" },
     });
+  }
+  if (!map.getSource("routes")) {
     map.addSource("routes", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+  }
+  if (!map.getLayer("routes")) {
     map.addLayer({
       id: "routes", type: "line", source: "routes",
       paint: {
@@ -481,6 +495,23 @@ function initMap(token) {
       },
       layout: { "line-cap": "round", "line-join": "round", "line-sort-key": ["case", ["get", "sel"], 1, 0] },
     });
+  }
+}
+
+function initMap(token) {
+  mapboxgl.accessToken = token;
+  map = new mapboxgl.Map({
+    container: "map",
+    style: MAP_STYLES[activeMapStyle].url,
+    center: [139.55, 36.05], zoom: 8.5, language: "ja",
+  });
+  map.addControl(new mapboxgl.NavigationControl(), "top-right");
+  map.addControl(new mapboxgl.ScaleControl(), "bottom-right");
+  map.on("style.load", () => {
+    addMapLayers();
+    renderLinks(resultIndex());
+  });
+  map.on("load", () => {
     renderMarkers();
     fitAll();
   });
@@ -1035,6 +1066,7 @@ function renderAll() {
 
 function bindUi() {
   $$(".tabs button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
+  $("#map-style-select").addEventListener("change", (e) => changeMapStyle(e.target.value));
   $$(".search").forEach(createSearch);
   bindList("targets");
   bindList("candidates");
@@ -1062,6 +1094,12 @@ function bindUi() {
 
 async function init() {
   bindUi();
+  try {
+    const savedMapStyle = localStorage.getItem("mapStyle");
+    if (Object.hasOwn(MAP_STYLES, savedMapStyle)) activeMapStyle = savedMapStyle;
+    else if (savedMapStyle === "auto") activeMapStyle = DARK ? "dark" : "streets";
+  } catch { /* 無視 */ }
+  $("#map-style-select").value = activeMapStyle;
   state.config = await api("/api/config");
   let token = state.config.token;
   if (!state.config.token_configured) token = await askToken();
