@@ -13,7 +13,9 @@
                          (優先 / なるべく避ける を考慮した上位と、考慮しない上位の両方)
     b. ルートで比較   … 各組で短い探索時間(screen_time_sec)のルート最適化を回し、
                          実際の最長所要(目的関数が total なら総所要)で比べる
-    c. 本計算         … 選んだ組で探索時間 time_limit_sec のルート最適化をやり直す
+    c. 本計算         … 選んだ組で探索時間 time_limit_sec のルート最適化をやり直す。
+                         直行前提の 1 位(従来方式が選ぶ組)も従来と同じ条件で解き、比べ直す
+                         (従来の 2 段方式より悪い結果にはしない)
 
 各拠点に置く機材の数もルートの結果で決める。1 組ごとに次の 2 通りで解き、良いほうを採る。
     fixed    … 機材数 = 直行前提の担当数(従来の 2 段方式と同じ前提)
@@ -141,66 +143,79 @@ def plan(tmat, cost, alternatives, *, objective="makespan", capacity=1, max_deli
             return None
         return lambda f, msg: progress(lo + (hi - lo) * max(0.0, min(f, 1.0)), msg)
 
+    def make_row(rank, sub, res):
+        mk, tot, _, _ = evaluate(cost, sub)
+        row = {"rank": rank, "subset": sub, "direct_makespan": mk, "direct_total": tot,
+               "route": res, "stock_mode": res["stock_mode"] if res else None, "final": False}
+        set_route(row, res)
+        return row
+
+    def set_route(row, res):
+        row["route"] = res
+        if res is None:
+            return
+        sub = row["subset"]
+        picked = picked_per_depot(res, len(sub))
+        used = [sub[i] for i, c in enumerate(picked) if c > 0]
+        row.update(route_makespan=float(res["makespan"]),
+                   route_total=float(sum(v["time_min"] for v in res["vehicles"])),
+                   key=_primary(res, objective), stock_mode=res["stock_mode"],
+                   n_pref=sum(u in pref for u in used), n_avoid=sum(u in avd for u in used))
+
+    def choose(rows):
+        ok = [r for r in rows if r["route"] is not None]
+        if not ok:
+            return rows[0], None
+        best = min(r["key"][0] for r in ok)
+        m = margin if (pref or avd) else 0.0
+        within = [r for r in ok if r["key"][0] <= best + m + 1e-9]
+        return min(within, key=lambda r: (-r["n_pref"], r["n_avoid"], r["key"], r["rank"])), best
+
+    # b. ルートで比較(試算)
     screened = []
-    screen_share = 0.0 if len(cands) <= 1 else 0.5
-    for rank, sub in enumerate(cands, 1):
-        if len(cands) <= 1:
-            break
-        lo = screen_share * (rank - 1) / len(cands)
-        hi = screen_share * rank / len(cands)
-        sp = stage(lo, hi)
+    compare = len(cands) > 1
+    screen_share = 0.5 if compare else 0.0
+    for rank, sub in enumerate(cands if compare else [], 1):
+        sp = stage(screen_share * (rank - 1) / len(cands), screen_share * rank / len(cands))
         if sp:
             sp(0.0, f"候補 {rank}/{len(cands)} 組目のルートを試算中")
         res = route_best(tmat, cost, sub, n_cands, objective, time_limit_sec=screen_time_sec,
                          cancel=cancel, **common)
-        mk, tot, _, _ = evaluate(cost, sub)
-        row = {"rank": rank, "subset": sub, "direct_makespan": mk, "direct_total": tot,
-               "route": res, "stock_mode": res["stock_mode"] if res else None}
-        if res is not None:
-            picked = picked_per_depot(res, len(sub))
-            used = [sub[i] for i, c in enumerate(picked) if c > 0]
-            row.update(route_makespan=float(res["makespan"]),
-                       route_total=float(sum(v["time_min"] for v in res["vehicles"])),
-                       key=_primary(res, objective),
-                       n_pref=sum(u in pref for u in used), n_avoid=sum(u in avd for u in used))
-        screened.append(row)
+        screened.append(make_row(rank, sub, res))
 
-    if screened:
-        ok = [r for r in screened if r["route"] is not None]
-        if not ok:
-            chosen = screened[0]
-            best_primary = None
+    # c. 本計算: 試算で選んだ組を、良かった方式で探索時間いっぱい解く。
+    #    直行前提の 1 位(従来の 2 段方式が選ぶ組)も、従来と同じ fixed 方式・同じ探索時間で解いて
+    #    比べ直す。これで従来方式より悪い結果にはならない。
+    if compare:
+        chosen, _ = choose(screened)
+        finals = [chosen] + ([screened[0]] if chosen is not screened[0] else [])
+    else:
+        finals = [make_row(1, cands[0], None)]
+    for n_f, row in enumerate(finals):
+        if compare and row["rank"] == 1:
+            # 従来方式と同じ条件。自身が採用候補で試算が flexible なら、それも解き直す
+            extra = (row["stock_mode"],) if row is chosen and row["stock_mode"] == "flexible" else ()
+            modes = ("fixed",) + extra
+        elif row["route"] is not None:
+            modes = (row["stock_mode"],)
+        elif is_direct_equivalent(capacity, max_deliveries, num_vehicles, n):
+            modes = ("fixed",)      # 直行前提の担当どおりが最適(各目的地を最寄り拠点から)
         else:
-            best_primary = min(r["key"][0] for r in ok)
-            m = margin if (pref or avd) else 0.0
-            within = [r for r in ok if r["key"][0] <= best_primary + m + 1e-9]
-            chosen = min(within, key=lambda r: (-r["n_pref"], r["n_avoid"], r["key"], r["rank"]))
-        subset, chosen_rank = chosen["subset"], chosen["rank"]
-    else:
-        subset, chosen_rank, chosen, best_primary = cands[0], 1, None, None
+            modes = STOCK_MODES
+        fp = stage(screen_share + (1 - screen_share) * n_f / len(finals),
+                   screen_share + (1 - screen_share) * (n_f + 1) / len(finals))
+        if fp:
+            fp(0.0, f"候補 {row['rank']} 組目のルートを本計算中")
+        res = route_best(tmat, cost, row["subset"], n_cands, objective, modes=modes,
+                         time_limit_sec=time_limit_sec, progress=fp, cancel=cancel, **common)
+        # 時間制限つきの探索なので、本計算が試算より悪いことが稀にある。そのときは試算の解を使う
+        if res is not None and (row["route"] is None or _primary(res, objective) <= row["key"]):
+            set_route(row, res)
+        row["final"] = True
 
-    fp = stage(screen_share, 1.0)
-    if fp:
-        fp(0.0, "選んだ組合せでルートを本計算中")
-    # 本計算: 試算で良かった方式で探索時間いっぱい解く(試算なしなら両方式)
-    if chosen and chosen["route"] is not None:
-        modes = (chosen["route"]["stock_mode"],)
-    elif is_direct_equivalent(capacity, max_deliveries, num_vehicles, n):
-        modes = ("fixed",)          # 直行前提の担当どおりが最適(各目的地を最寄り拠点から)
-    else:
-        modes = STOCK_MODES
-    route = route_best(tmat, cost, subset, n_cands, objective, modes=modes,
-                       time_limit_sec=time_limit_sec, progress=fp, cancel=cancel, **common)
-    # 時間制限つきの探索なので、本計算が試算より悪いことが稀にある。そのときは試算の解を使う
-    if chosen and chosen["route"] is not None and (
-            route is None or _primary(route, objective) > chosen["key"]):
-        route = chosen["route"]
-    if route is not None and best_primary is not None:
-        best_primary = min(best_primary, _primary(route, objective)[0])
-    elif route is not None:
-        best_primary = _primary(route, objective)[0]
-
-    return {"subset": [int(i) for i in subset], "route": route, "chosen_rank": chosen_rank,
-            "best_primary": best_primary, "skipped": skipped,
+    rows = screened if compare else finals
+    chosen, best_primary = choose(rows)
+    return {"subset": [int(i) for i in chosen["subset"]], "route": chosen["route"],
+            "chosen_rank": chosen["rank"], "best_primary": best_primary, "skipped": skipped,
             "screened": [{k: v for k, v in r.items() if k not in ("route", "key")}
                          for r in screened]}

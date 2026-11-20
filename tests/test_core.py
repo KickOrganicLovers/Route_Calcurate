@@ -396,6 +396,7 @@ def test_integrated_plan_picks_best_route():
     best = min(r["route_makespan"] for r in res["screened"])
     assert res["route"]["makespan"] <= best + 1e-9
     assert res["subset"] == res["screened"][res["chosen_rank"] - 1]["subset"]
+    assert res["screened"][0]["final"]          # 直行前提の 1 位も本計算で比べ直す
     # どの目的地にもちょうど 1 回届き、積載量を守る
     _check_routes(res["route"], [6] * 2, 6, 3, 3)
 
