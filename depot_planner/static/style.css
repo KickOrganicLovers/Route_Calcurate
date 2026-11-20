@@ -207,8 +207,8 @@ details summary { cursor: pointer; color: var(--cds-link-primary); font-size: 12
 .map-legend .li .sw { margin-right: 0; }
 .map-legend .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--target); border: 1.5px solid #fff; flex: none; }
 .map-legend .traffic-line {
-  width: 22px; height: 0; border-top: 5px solid var(--traffic-color);
-  filter: drop-shadow(0 0 1px #111); flex: none;
+  display: inline-block; width: 22px; height: 5px; border-radius: 3px;
+  box-shadow: 0 0 0 1.5px #161616; flex: none;
 }
 .map-legend .sq { width: 12px; height: 12px; border-radius: 2px; background: var(--candidate); flex: none; }
 .mapboxgl-popup-content {

@@ -20,7 +20,7 @@ const PROVIDER_LABEL = {
   mapbox: "Mapbox Matrix API", google_maps: "Google Maps Routes API",
   osrm: "OSRM", auto: "Mapbox → OSRM",
 };
-const TRAFFIC_COLORS = { NORMAL: "#39ff14", SLOW: "#f5ff00", TRAFFIC_JAM: "#ff1744" };
+const TRAFFIC_COLORS = { NORMAL: "#39ff14", SLOW: "#f5ff00", TRAFFIC_JAM: "#ff1744", UNKNOWN: "#9e9e9e" };
 const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const MAP_STYLES = {
   streets: { label: "道路", url: "mapbox://styles/mapbox/streets-v12" },
@@ -900,14 +900,19 @@ function drawGoogleLines(layer, features) {
     const path = feature.geometry.coordinates.map(([lng, lat]) => ({ lat, lng }));
     const weight = hasTraffic ? (sel ? 7 : 5) : sel ? 5 : layer === "links" ? 2 : 2.5;
     const lines = [];
+    // 縁取り(黒)は必ず色線より下に描く。区間ごとに描くので、重ね順を決めないと
+    // 後の区間の縁取りが前の区間の端を黒く塗りつぶしてしまう。選択中の車両は一番上に
+    const z = sel ? 10 : 0;
     if (hasTraffic) {
       lines.push(new google.maps.Polyline({
         map, path, strokeColor: "#161616", strokeWeight: weight + 3, strokeOpacity: dim ? 0.12 : 0.9,
+        zIndex: z + 1,
       }));
     }
     lines.push(new google.maps.Polyline({
       map, path, strokeColor: color, strokeWeight: weight,
       strokeOpacity: dim ? 0.12 : layer === "links" ? 0.75 : 1,
+      zIndex: z + 2,
     }));
     return lines;
   });
@@ -942,7 +947,7 @@ function renderRoutes(ri) {
           features.push({
             type: "Feature",
             properties: {
-              color: TRAFFIC_COLORS[segment.speed] || depotColor,
+              color: TRAFFIC_COLORS[segment.speed] || TRAFFIC_COLORS.UNKNOWN,
               speed: segment.speed,
               sel,
               dim: state.vehicle != null && !sel,
@@ -1011,10 +1016,10 @@ function renderLegend(ri) {
       [...ri.depots.values()].map((d) => `<div class="li"><span class="sw" style="background:${d.color}">${d.letter}</span>${esc(d.d.name)}</div>`).join("");
   }
   if (state.result && state.result.provider === "google_maps" && state.result.params.profile.startsWith("driving")) {
-    html += `<div class="li muted" style="margin-top:6px">Google交通状況</div>
-      <div class="li"><span class="traffic-line" style="--traffic-color:${TRAFFIC_COLORS.NORMAL}"></span>通常</div>
-      <div class="li"><span class="traffic-line" style="--traffic-color:${TRAFFIC_COLORS.SLOW}"></span>低速</div>
-      <div class="li"><span class="traffic-line" style="--traffic-color:${TRAFFIC_COLORS.TRAFFIC_JAM}"></span>渋滞</div>`;
+    const swatch = (key, label) =>
+      `<div class="li"><span class="traffic-line" style="background-color:${TRAFFIC_COLORS[key]}"></span>${label}</div>`;
+    html += `<div class="li muted" style="margin-top:6px">Google交通状況</div>` +
+      swatch("NORMAL", "通常") + swatch("SLOW", "低速") + swatch("TRAFFIC_JAM", "渋滞") + swatch("UNKNOWN", "情報なし");
   }
   el.innerHTML = html;
 }

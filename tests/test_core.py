@@ -2,6 +2,7 @@
 """ソルバー・シナリオ・API のテスト(ネットワークには出ない)。"""
 
 from itertools import combinations
+import io
 import json
 
 import numpy as np
@@ -313,6 +314,62 @@ def test_google_route_geometry_splits_traffic_segments(monkeypatch):
     body = json.loads(req.data)
     assert body["routingPreference"] == "TRAFFIC_AWARE"
     assert body["extraComputations"] == ["TRAFFIC_ON_POLYLINE"]
+
+
+def test_google_traffic_segments_fill_gaps_and_tolerate_bad_intervals():
+    coords = [[0, 0], [1, 1], [2, 2], [3, 3], [4, 4]]
+    segments = google_maps_api._traffic_segments(coords, [
+        {"endPolylinePointIndex": 1, "speed": "NORMAL"},
+        # 1→2 は区間なし(抜け)
+        {"startPolylinePointIndex": 2, "endPolylinePointIndex": 3, "speed": "TRAFFIC_JAM"},
+        {"startPolylinePointIndex": 3, "endPolylinePointIndex": 99, "speed": "SPEED_UNSPECIFIED"},
+        {"startPolylinePointIndex": 2, "endPolylinePointIndex": 2, "speed": "SLOW"},   # 長さ 0
+    ])
+    assert segments == [
+        {"speed": "NORMAL", "coordinates": [[0, 0], [1, 1]]},
+        {"speed": "UNKNOWN", "coordinates": [[1, 1], [2, 2]]},
+        {"speed": "TRAFFIC_JAM", "coordinates": [[2, 2], [3, 3]]},
+        {"speed": "UNKNOWN", "coordinates": [[3, 3], [4, 4]]},
+    ]
+    assert google_maps_api._traffic_segments(coords, []) == [
+        {"speed": "UNKNOWN", "coordinates": coords}]
+
+
+def test_google_post_retries_rate_limit(monkeypatch):
+    calls = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return b'{"ok": true}'
+
+    def fake_urlopen(req, timeout):
+        calls.append(1)
+        if len(calls) < 3:
+            raise google_maps_api.urllib.error.HTTPError(
+                req.full_url, 429, "Too Many Requests", {}, io.BytesIO(b"{}"))
+        return Response()
+
+    monkeypatch.setattr(google_maps_api.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(google_maps_api.time, "sleep", lambda s: None)
+    assert google_maps_api._post_json("https://example.invalid", {}, "x", "key") == {"ok": True}
+    assert len(calls) == 3
+
+
+def test_google_post_gives_up_after_retries(monkeypatch):
+    def fake_urlopen(req, timeout):
+        raise google_maps_api.urllib.error.HTTPError(
+            req.full_url, 429, "Too Many Requests", {}, io.BytesIO(b"{}"))
+
+    monkeypatch.setattr(google_maps_api.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(google_maps_api.time, "sleep", lambda s: None)
+    with pytest.raises(google_maps_api.GoogleMapsError, match="429"):
+        google_maps_api._post_json("https://example.invalid", {}, "x", "key")
 
 
 def test_google_route_geometry_chunks_many_stops(monkeypatch):

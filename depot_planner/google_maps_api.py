@@ -3,6 +3,7 @@
 
 import json
 import re
+import time
 import urllib.error
 import urllib.request
 
@@ -13,6 +14,8 @@ COMPUTE_ROUTES_URL = "https://routes.googleapis.com/directions/v2:computeRoutes"
 MATRIX_ORIGIN_LIMIT = 25
 MATRIX_DESTINATION_LIMIT = 25
 MAX_ROUTE_INTERMEDIATES = 25
+TRAFFIC_SPEEDS = ("NORMAL", "SLOW", "TRAFFIC_JAM")
+RETRY_WAITS_SEC = (10, 20, 30)   # 429/503 のときの待ち時間。上限は 1 分単位なので合計 1 分ほど待つ
 TRAVEL_MODES = {
     "driving": ("DRIVE", "TRAFFIC_AWARE"),
     "driving-traffic": ("DRIVE", "TRAFFIC_AWARE"),
@@ -40,6 +43,23 @@ def _waypoints(points):
 
 
 def _post_json(url, body, field_mask, api_key=None):
+    """POST して JSON を返す。利用上限(429)や一時障害(503)は少し待って取り直す。"""
+    for wait in RETRY_WAITS_SEC:
+        try:
+            return _post_json_once(url, body, field_mask, api_key)
+        except _Retryable:
+            time.sleep(wait)
+    try:
+        return _post_json_once(url, body, field_mask, api_key)
+    except _Retryable as e:
+        raise GoogleMapsError(str(e)) from None
+
+
+class _Retryable(GoogleMapsError):
+    pass
+
+
+def _post_json_once(url, body, field_mask, api_key=None):
     req = urllib.request.Request(
         url,
         data=json.dumps(body).encode("utf-8"),
@@ -61,7 +81,10 @@ def _post_json(url, body, field_mask, api_key=None):
         hint = ""
         if e.code in (401, 403):
             hint = " Google Cloud で Routes API が有効か、API キーと請求先設定を確認してください。"
-        raise GoogleMapsError(
+        if e.code == 429:
+            hint = " 1 分あたりの利用上限に達しました。しばらく待ってから再実行してください。"
+        error = _Retryable if e.code in (429, 503) else GoogleMapsError
+        raise error(
             f"Google Maps Routes API エラー (HTTP {e.code}): {detail or e.reason}.{hint}") from None
     except (OSError, ValueError) as e:
         raise GoogleMapsError(f"Google Maps Routes API に接続できません: {e}") from None
@@ -192,17 +215,32 @@ def route_geometry(points, profile="driving", api_key=None):
             continue
 
         intervals = ((route.get("travelAdvisory") or {}).get("speedReadingIntervals") or [])
-        if not intervals:
-            segments.append({"speed": "UNKNOWN", "coordinates": coordinates})
-            continue
-        for interval in intervals:
-            start = interval.get("startPolylinePointIndex", 0)
-            end = interval.get("endPolylinePointIndex")
-            if (not isinstance(start, int) or not isinstance(end, int)
-                    or not 0 <= start < end < len(coordinates)):
-                raise GoogleMapsError("Google Maps Routes API から不正な交通情報区間が返されました")
-            segments.append({
-                "speed": interval.get("speed", "UNKNOWN"),
-                "coordinates": coordinates[start:end + 1],
-            })
+        segments.extend(_traffic_segments(coordinates, intervals))
     return segments
+
+
+def _traffic_segments(coordinates, intervals):
+    """ポリラインを交通速度ごとの区間に分ける。
+
+    Google の区間は抜けや重なりがあり得るので、点と点の間 1 つずつに速度を割り当ててから
+    同じ速度の並びをまとめる。区間の無いところは UNKNOWN(情報なし)で埋め、線が途切れないようにする。
+    """
+    edges = len(coordinates) - 1
+    speeds = ["UNKNOWN"] * edges
+    for interval in intervals:
+        start = interval.get("startPolylinePointIndex", 0)
+        end = interval.get("endPolylinePointIndex", edges)
+        if not isinstance(start, int) or not isinstance(end, int):
+            continue
+        speed = interval.get("speed") or "UNKNOWN"
+        if speed not in TRAFFIC_SPEEDS:
+            speed = "UNKNOWN"
+        for k in range(max(start, 0), min(end, edges)):
+            speeds[k] = speed
+    out = []
+    begin = 0
+    for k in range(1, edges + 1):
+        if k == edges or speeds[k] != speeds[begin]:
+            out.append({"speed": speeds[begin], "coordinates": coordinates[begin:k + 1]})
+            begin = k
+    return out
