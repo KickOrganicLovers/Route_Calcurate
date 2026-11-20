@@ -2,12 +2,13 @@
 """ソルバー・シナリオ・API のテスト(ネットワークには出ない)。"""
 
 from itertools import combinations
+import json
 
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
-from depot_planner import config, routing, runner, server, solver
+from depot_planner import config, google_maps_api, routing, runner, server, solver, travel_times
 from depot_planner import scenario as scn
 
 
@@ -136,6 +137,62 @@ def test_runner(monkeypatch):
     assert res["summary"]["lower_bound_min"] <= res["summary"]["makespan_min"]
 
 
+def test_runner_passes_cache_clear_option(monkeypatch):
+    clear_options = []
+
+    class Cache:
+        def __init__(self, clear=False):
+            clear_options.append(clear)
+
+    monkeypatch.setattr(runner, "PairCache", Cache)
+    monkeypatch.setattr(runner, "build_matrix", _fake_matrix)
+    runner.run_scenario(_scenario(), clear_cache=True)
+    assert clear_options == [True]
+
+
+def test_start_run_passes_cache_clear_option(monkeypatch):
+    worker_args = []
+
+    class ThreadStub:
+        def __init__(self, target, args, daemon):
+            worker_args.append(args)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(server.threading, "Thread", ThreadStub)
+    server.start_run(_scenario(), clear_cache=True)
+    assert worker_args[-1][2] is True
+
+
+def test_google_run_geometry_is_kept_in_job_memory(monkeypatch):
+    route_segments = [{"speed": "TRAFFIC_JAM", "coordinates": [[139.0, 35.0], [139.1, 35.1]]}]
+    calls = []
+
+    def fake_route_geometry(points, profile):
+        calls.append((points, profile))
+        return route_segments
+
+    job = {"result": {
+        "provider": "google_maps",
+        "params": {"profile": "driving"},
+        "routing": {"vehicles": [{
+            "no": 1, "start_lat": 35.0, "start_lon": 139.0,
+            "stops": [{"lat": 35.1, "lon": 139.1}],
+        }]},
+    }}
+    monkeypatch.setattr(server, "_job", lambda _: job)
+    monkeypatch.setattr(google_maps_api, "route_geometry", fake_route_geometry)
+
+    result = server.run_geometry("job")
+    assert result["vehicles"]["1"] == {"segments": route_segments}
+    assert result["errors"] == []
+    assert len(calls) == 1
+    assert "geometry" not in server.get_run("job")
+    assert server.run_geometry("job") == result
+    assert len(calls) == 1
+
+
 def test_validate_messages():
     sc = _scenario()
     sc["params"]["num_depots"] = 9
@@ -163,6 +220,301 @@ def test_save_token_keeps_other_lines(tmp_path, monkeypatch):
     assert env.read_text(encoding="utf-8") == "OTHER=1\nMAPBOX_ACCESS_TOKEN=pk.new\n"
     monkeypatch.delenv(config.TOKEN_KEY, raising=False)
     assert config.get_token(env) == "pk.new"
+
+
+def test_save_google_maps_api_key_keeps_other_lines(tmp_path, monkeypatch):
+    monkeypatch.delenv(config.GOOGLE_MAPS_API_KEY, raising=False)
+    env = tmp_path / ".env"
+    env.write_text("OTHER=1\nMAPBOX_ACCESS_TOKEN=pk.existing\n", encoding="utf-8")
+    config.save_google_maps_api_key("google-test-key", env)
+    assert env.read_text(encoding="utf-8") == (
+        "OTHER=1\nMAPBOX_ACCESS_TOKEN=pk.existing\nGOOGLE_MAPS_API_KEY=google-test-key\n")
+    monkeypatch.delenv(config.GOOGLE_MAPS_API_KEY, raising=False)
+    assert config.get_google_maps_api_key(env) == "google-test-key"
+
+
+def test_save_google_maps_js_api_key_uses_separate_env_entry(tmp_path, monkeypatch):
+    monkeypatch.delenv(config.GOOGLE_MAPS_JS_API_KEY, raising=False)
+    env = tmp_path / ".env"
+    env.write_text("GOOGLE_MAPS_API_KEY=server-key\n", encoding="utf-8")
+    config.save_google_maps_js_api_key("browser-key", env)
+    assert env.read_text(encoding="utf-8") == (
+        "GOOGLE_MAPS_API_KEY=server-key\nGOOGLE_MAPS_JS_API_KEY=browser-key\n")
+    monkeypatch.delenv(config.GOOGLE_MAPS_JS_API_KEY, raising=False)
+    assert config.get_google_maps_js_api_key(env) == "browser-key"
+
+
+@pytest.mark.parametrize("profile", ["driving", "driving-traffic"])
+def test_google_routes_matrix_block_maps_elements_to_minutes(monkeypatch, profile):
+    requests = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return b'[{"originIndex":0,"destinationIndex":1,"duration":"150s","condition":"ROUTE_EXISTS","status":{}},' \
+                   b'{"originIndex":0,"destinationIndex":0,"condition":"ROUTE_NOT_FOUND","status":{}}]'
+
+    def fake_urlopen(req, timeout):
+        requests.append(req)
+        return Response()
+
+    monkeypatch.setattr(google_maps_api.urllib.request, "urlopen", fake_urlopen)
+    matrix = google_maps_api.matrix_block(
+        [(35.0, 139.0)], [(35.1, 139.1), (35.2, 139.2)],
+        profile=profile, api_key="test-key")
+
+    assert matrix == [[None, 2.5]]
+    req = requests[0]
+    assert req.get_header("X-goog-api-key") == "test-key"
+    assert req.get_header("X-goog-fieldmask") == "originIndex,destinationIndex,duration,condition,status"
+    body = json.loads(req.data)
+    assert body["travelMode"] == "DRIVE"
+    assert body["routingPreference"] == "TRAFFIC_AWARE"
+
+
+def test_google_route_geometry_splits_traffic_segments(monkeypatch):
+    requests = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return (b'{"routes":[{"polyline":{"encodedPolyline":"_p~iF~ps|U_ulLnnqC_mqNvxq`@"},'
+                    b'"travelAdvisory":{"speedReadingIntervals":['
+                    b'{"endPolylinePointIndex":1,"speed":"NORMAL"},'
+                    b'{"startPolylinePointIndex":1,"endPolylinePointIndex":2,"speed":"TRAFFIC_JAM"}]}}]}')
+
+    def fake_urlopen(req, timeout):
+        requests.append(req)
+        return Response()
+
+    monkeypatch.setattr(google_maps_api.urllib.request, "urlopen", fake_urlopen)
+    segments = google_maps_api.route_geometry(
+        [(38.5, -120.2), (40.7, -120.95), (43.252, -126.453)],
+        profile="driving", api_key="test-key")
+
+    assert segments == [
+        {"speed": "NORMAL", "coordinates": [[-120.2, 38.5], [-120.95, 40.7]]},
+        {"speed": "TRAFFIC_JAM", "coordinates": [[-120.95, 40.7], [-126.453, 43.252]]},
+    ]
+    req = requests[0]
+    assert req.full_url == google_maps_api.COMPUTE_ROUTES_URL
+    assert req.get_header("X-goog-fieldmask") == (
+        "routes.polyline.encodedPolyline,routes.travelAdvisory.speedReadingIntervals")
+    body = json.loads(req.data)
+    assert body["routingPreference"] == "TRAFFIC_AWARE"
+    assert body["extraComputations"] == ["TRAFFIC_ON_POLYLINE"]
+
+
+def test_google_route_geometry_chunks_many_stops(monkeypatch):
+    requests = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return (b'{"routes":[{"polyline":{"encodedPolyline":"_p~iF~ps|U_ulLnnqC"},'
+                    b'"travelAdvisory":{"speedReadingIntervals":['
+                    b'{"endPolylinePointIndex":1,"speed":"SLOW"}]}}]}')
+
+    def fake_urlopen(req, timeout):
+        requests.append(json.loads(req.data))
+        return Response()
+
+    monkeypatch.setattr(google_maps_api, "MAX_ROUTE_INTERMEDIATES", 1)
+    monkeypatch.setattr(google_maps_api.urllib.request, "urlopen", fake_urlopen)
+    segments = google_maps_api.route_geometry(
+        [(35.0 + i / 100, 139.0) for i in range(4)],
+        profile="driving-traffic", api_key="test-key")
+
+    assert len(requests) == len(segments) == 2
+    assert all(len(request["intermediates"]) <= 1 for request in requests)
+
+
+def test_clear_cache_forces_fresh_matrix(tmp_path, monkeypatch):
+    source, destination = (35.0, 139.0), (35.1, 139.1)
+    pair_key = f"{travel_times._pt(source)}>{travel_times._pt(destination)}"
+    path = tmp_path / "cache.json"
+    old_cache = travel_times.PairCache(path)
+    old_cache.set("mapbox", "driving", pair_key, 12.3)
+    old_cache.save()
+    calls = []
+
+    def fake_matrix(sources, destinations, profile):
+        calls.append((sources, destinations, profile))
+        return [[7.5]]
+
+    monkeypatch.setattr(travel_times.mapbox_api, "matrix_block", fake_matrix)
+    matrix, used, fetched = travel_times.build_matrix(
+        [source], [destination], provider="mapbox",
+        cache=travel_times.PairCache(path, clear=True))
+
+    assert used == "mapbox" and fetched == 1
+    assert matrix[0, 0] == 7.5
+    assert len(calls) == 1
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["entries"]["mapbox|driving"][pair_key]["value"] == 7.5
+
+
+def test_google_driving_uses_live_traffic_without_disk_cache(tmp_path, monkeypatch):
+    source, destination = (35.0, 139.0), (35.1, 139.1)
+    pair_key = f"{travel_times._pt(source)}>{travel_times._pt(destination)}"
+    path = tmp_path / "cache.json"
+    old_cache = travel_times.PairCache(path)
+    old_cache.set("google_maps", "driving", pair_key, 12.3)
+    old_cache.save()
+    calls = []
+
+    def fake_matrix(sources, destinations, profile):
+        calls.append(profile)
+        return [[7.5]]
+
+    monkeypatch.setattr(google_maps_api, "matrix_block", fake_matrix)
+    matrix, used, fetched = travel_times.build_matrix(
+        [source], [destination], provider="google_maps",
+        cache=travel_times.PairCache(path))
+
+    assert used == "google_maps" and fetched == 1
+    assert matrix[0, 0] == 7.5
+    assert calls == ["driving-traffic"]
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert not any(key.startswith("google_maps|") for key in saved["entries"])
+
+    _, _, fetched = travel_times.build_matrix(
+        [source], [destination], provider="google_maps",
+        cache=travel_times.PairCache(path))
+    assert fetched == 1
+    assert calls == ["driving-traffic", "driving-traffic"]
+
+
+def test_google_matrix_is_reused_only_within_the_current_run(tmp_path, monkeypatch):
+    calls = []
+    now = 1_800_000_000
+    monkeypatch.setattr(travel_times.time, "time", lambda: now)
+
+    def fake_matrix(sources, destinations, profile):
+        calls.append((sources, destinations, profile))
+        return [[10.0 for _ in destinations] for _ in sources]
+
+    monkeypatch.setattr(google_maps_api, "matrix_block", fake_matrix)
+    path = tmp_path / "cache.json"
+    sources = [(35.0, 139.0)]
+    destinations = [(35.0, 139.0 + i / 1000) for i in range(26)]
+    cache = travel_times.PairCache(path)
+    matrix, used, fetched = travel_times.build_matrix(
+        sources, destinations,
+        provider="google_maps", cache=cache)
+
+    assert used == "google_maps" and fetched == 26
+    assert matrix.shape == (1, 26) and np.all(matrix == 10.0)
+    assert [len(destinations) for _, destinations, _ in calls] == [25, 1]
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["version"] == 2
+    assert not any(key.startswith("google_maps|") for key in saved["entries"])
+
+    cached_matrix, cached_provider, cached_pairs = travel_times.build_matrix(
+        sources, destinations,
+        provider="google_maps", cache=cache)
+    assert cached_provider == "google_maps" and cached_pairs == 0
+    assert np.array_equal(cached_matrix, matrix)
+    assert len(calls) == 2
+
+    _, cached_provider, fetched_again = travel_times.build_matrix(
+        sources, destinations,
+        provider="google_maps", cache=travel_times.PairCache(path))
+    assert cached_provider == "google_maps" and fetched_again == 26
+    assert len(calls) == 4
+
+
+def test_pair_cache_expires_entries_at_thirty_days(tmp_path, monkeypatch):
+    now = 1_800_000_000
+    monkeypatch.setattr(travel_times.time, "time", lambda: now)
+    path = tmp_path / "cache.json"
+    source, destination = (35.0, 139.0), (35.1, 139.1)
+    pair_key = f"{travel_times._pt(source)}>{travel_times._pt(destination)}"
+    path.write_text(json.dumps({
+        "version": 2,
+        "entries": {
+            "mapbox|driving": {
+                pair_key: {"value": 12.3, "cached_at": now - travel_times.CACHE_TTL_SECONDS}
+            }
+        },
+    }), encoding="utf-8")
+    calls = []
+
+    def fake_matrix(sources, destinations, profile):
+        calls.append((sources, destinations, profile))
+        return [[7.5]]
+
+    monkeypatch.setattr(travel_times.mapbox_api, "matrix_block", fake_matrix)
+    matrix, used, fetched = travel_times.build_matrix(
+        [source], [destination], provider="mapbox",
+        cache=travel_times.PairCache(path))
+
+    assert used == "mapbox" and fetched == 1
+    assert matrix[0, 0] == 7.5
+    assert len(calls) == 1
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["entries"]["mapbox|driving"][pair_key] == {
+        "value": 7.5, "cached_at": now}
+
+
+def test_pair_cache_migrates_unexpired_legacy_entries(tmp_path, monkeypatch):
+    now = 1_800_000_000
+    monkeypatch.setattr(travel_times.time, "time", lambda: now)
+    path = tmp_path / "cache.json"
+    source, destination = (35.0, 139.0), (35.1, 139.1)
+    pair_key = f"{travel_times._pt(source)}>{travel_times._pt(destination)}"
+    path.write_text(json.dumps({
+        "version": 1,
+        "updated_at": now - travel_times.CACHE_TTL_SECONDS + 1,
+        "entries": {"mapbox|driving": {pair_key: 12.3}},
+    }), encoding="utf-8")
+    cache = travel_times.PairCache(path)
+
+    matrix, used, fetched = travel_times.build_matrix(
+        [source], [destination], provider="mapbox", cache=cache)
+
+    assert used == "mapbox" and fetched == 0
+    assert matrix[0, 0] == 12.3
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["version"] == 2
+    assert saved["entries"]["mapbox|driving"][pair_key] == {
+        "value": 12.3, "cached_at": now - travel_times.CACHE_TTL_SECONDS + 1}
+
+
+def test_google_maps_run_results_are_saved_and_exported(tmp_path, monkeypatch):
+    google_result = {"provider": "google_maps", "scenario_name": "Google Test"}
+    monkeypatch.setattr(runner, "run_scenario", lambda *args, **kwargs: google_result)
+    save_calls = []
+    monkeypatch.setattr(server.report, "save_all",
+                        lambda result, docx: save_calls.append((result, docx)) or tmp_path)
+    job = {"cancel": False}
+    server._run_job(job, {})
+    assert job["status"] == "done" and job["run_dir"] == str(tmp_path)
+    assert save_calls == [(google_result, False)]
+
+    monkeypatch.setattr(server, "_job", lambda _: job)
+    monkeypatch.setattr(server.report, "to_json", lambda result: '{"provider":"google_maps"}')
+    response = server.export_run("test", "json")
+    assert response.body == b'{"provider":"google_maps"}'
+    monkeypatch.setattr(server.report, "to_docx",
+                        lambda result, path: path.write_bytes(b"docx"))
+    docx = server.export_run("test", "docx")
+    assert docx.path == tmp_path / "report.docx"
 
 
 def test_ensure_data_dir_copies_samples_once(tmp_path, monkeypatch):

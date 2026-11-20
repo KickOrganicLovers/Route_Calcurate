@@ -92,6 +92,8 @@ def cmd_run(a):
         rt["screen_candidates"] = a.screen
     if a.screen_time is not None:
         rt["screen_time_sec"] = a.screen_time
+    if a.clear_cache and a.no_fetch:
+        raise SystemExit("--clear-cache と --no-fetch は同時に指定できません")
     if sc["params"]["provider"] in ("mapbox", "auto") and not a.no_fetch:
         config.ensure_token_interactive()
 
@@ -106,7 +108,8 @@ def cmd_run(a):
             print(f"\r[{frac * 100:5.1f}%] {msg:<50}", end="", file=sys.stderr, flush=True)
 
     try:
-        result = runner.run_scenario(sc, progress=progress, allow_fetch=not a.no_fetch)
+        result = runner.run_scenario(sc, progress=progress, allow_fetch=not a.no_fetch,
+                                     clear_cache=a.clear_cache)
     except runner.ScenarioError as e:
         if show:
             print(file=sys.stderr)
@@ -223,6 +226,8 @@ def main(argv=None):
     r.add_argument("--no-save", action="store_true", help="runs/ に保存しない")
     r.add_argument("--no-docx", action="store_true", help="docx を作らない")
     r.add_argument("--no-fetch", action="store_true", help="API を呼ばずキャッシュだけで計算")
+    r.add_argument("--clear-cache", action="store_true",
+                   help="Mapbox / OSRM のキャッシュを使わず、全ペアを取得し直す")
     r.add_argument("-q", "--quiet", action="store_true")
     r.set_defaults(func=cmd_run)
 

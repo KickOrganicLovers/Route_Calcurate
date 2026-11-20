@@ -130,9 +130,10 @@
               <option value="walking">徒歩</option>
               <option value="cycling">自転車</option>
             </select><svg class="cds--select__arrow" viewBox="0 0 32 32" width="16" height="16" aria-hidden="true"><path d="M16 22 6 12 7.4 10.6 16 19.2 24.6 10.6 26 12z"/></svg></div></div></div>
-          <div class="cds--form-item"><div class="cds--select"><label class="cds--label" for="f-prov">取得元</label>
+          <div class="cds--form-item"><div class="cds--select"><label class="cds--label" for="f-prov">所要時間の取得元（地図も切り替わります）</label>
             <div class="cds--select-input__wrapper"><select id="f-prov" class="cds--select-input" name="provider">
               <option value="mapbox">Mapbox Matrix API</option>
+              <option value="google_maps">Google Maps Routes API</option>
               <option value="auto">Mapbox → 失敗時 OSRM</option>
               <option value="osrm">OSRM デモサーバ（自動車のみ）</option>
             </select><svg class="cds--select__arrow" viewBox="0 0 32 32" width="16" height="16" aria-hidden="true"><path d="M16 22 6 12 7.4 10.6 16 19.2 24.6 10.6 26 12z"/></svg></div></div></div>
@@ -182,6 +183,6 @@
 
 <div id="modal-root"></div>
 <div id="toast" class="toast-wrap" hidden></div>
-<script src="/static/app.js?v=0.3.0"></script>
+<script src="/static/app.js?v=0.3.4"></script>
 </body>
 </html>

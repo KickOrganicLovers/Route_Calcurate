@@ -33,7 +33,7 @@ DEFAULT_PARAMS = {
     "service_min": 10.0,        # 目的地での作業時間[分]
     "reload_min": 5.0,          # 補給地点での積込時間[分]
     "profile": "driving",       # driving / driving-traffic / walking / cycling
-    "provider": "mapbox",       # mapbox / osrm / auto
+    "provider": "mapbox",       # mapbox / google_maps / osrm / auto
     "objective": "makespan",    # makespan(最遅車両を最小化) / total(総所要を最小化)
     "preference_margin_min": 10.0,  # 優先 / なるべく避ける のために許す悪化幅[分]
     "sensitivity": {"enabled": True, "min": 1, "max": 10},

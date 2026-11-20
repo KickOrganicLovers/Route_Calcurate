@@ -16,6 +16,11 @@ const SERIES = DARK
   : ["#6929c4", "#1192e8", "#005d5d", "#9f1853", "#fa4d56", "#198038", "#002d9c", "#b28600"];
 const OTHER = "#8d8d8d";
 const STATUS_LABEL = { candidate: "候補", required: "必須", preferred: "優先", avoid: "なるべく避ける", excluded: "除外" };
+const PROVIDER_LABEL = {
+  mapbox: "Mapbox Matrix API", google_maps: "Google Maps Routes API",
+  osrm: "OSRM", auto: "Mapbox → OSRM",
+};
+const TRAFFIC_COLORS = { NORMAL: "#39ff14", SLOW: "#f5ff00", TRAFFIC_JAM: "#ff1744" };
 const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const MAP_STYLES = {
   streets: { label: "道路", url: "mapbox://styles/mapbox/streets-v12" },
@@ -62,6 +67,10 @@ const state = {
   routeLines: null,    // 車両番号 → 道路沿いの線 [[lon, lat], ...](Directions API。取得前は null)
 };
 let map = null;
+let currentMapProvider = null;
+let mapboxToken = null;
+let googleMapsApiPromise = null;
+const googleMapLines = { links: [], routes: [] };
 let activeMapStyle = DARK ? "dark" : "streets";
 const markers = { targets: new Map(), candidates: new Map() };
 
@@ -170,6 +179,52 @@ async function askToken(message) {
   return saved;
 }
 
+async function askGoogleMapsKey() {
+  let saved = false;
+  await modal({
+    title: "Google Routes API キーの設定",
+    body: `<p>Google Routes API が有効な API キーが必要です。行列の要素数に応じて課金が発生する場合があります。</p>
+      <p>キーはデータフォルダの <code>.env</code> に保存されます。</p>
+      <label class="cds--label" for="google-maps-key-input">API キー</label>
+      <input id="google-maps-key-input" class="cds--text-input" type="password" autocomplete="off" spellcheck="false">`,
+    buttons: [{ label: "キャンセル", value: null }, { label: "保存して続ける", value: "save", primary: true }],
+    validate: async (_, box) => {
+      const api_key = $("#google-maps-key-input", box).value.trim();
+      if (!api_key) return "API キーを入力してください";
+      try {
+        await api("/api/google-maps-key", { method: "POST", body: { api_key } });
+        state.config.google_maps_api_key_configured = true;
+        saved = true;
+        return null;
+      } catch (e) { return e.message; }
+    },
+  });
+  return saved;
+}
+
+async function askGoogleMapsJsKey() {
+  let saved = false;
+  await modal({
+    title: "Google Maps JavaScript API キーの設定",
+    body: `<p>ブラウザ地図用のキーが必要です。Routes API 用キーとは別に作成し、Maps JavaScript API のみを許可し、HTTP リファラーを <code>http://127.0.0.1:8765/*</code> に制限することを推奨します。</p>
+      <p>キーはデータフォルダの <code>.env</code> に保存されます。</p>
+      <label class="cds--label" for="google-maps-js-key-input">ブラウザ用 API キー</label>
+      <input id="google-maps-js-key-input" class="cds--text-input" type="password" autocomplete="off" spellcheck="false">`,
+    buttons: [{ label: "キャンセル", value: null }, { label: "保存して続ける", value: "save", primary: true }],
+    validate: async (_, box) => {
+      const api_key = $("#google-maps-js-key-input", box).value.trim();
+      if (!api_key) return "API キーを入力してください";
+      try {
+        await api("/api/google-maps-js-key", { method: "POST", body: { api_key } });
+        state.config.google_maps_js_api_key_configured = true;
+        saved = true;
+        return null;
+      } catch (e) { return e.message; }
+    },
+  });
+  return saved;
+}
+
 // ---------------------------------------------------------------------------
 // シナリオ操作
 // ---------------------------------------------------------------------------
@@ -194,6 +249,12 @@ function setScenario(sc, file) {
   state.resultStale = false;
   $("#dirty-mark").hidden = true;
   renderAll();
+  switchMapProvider(sc.params.provider).catch((e) => {
+    toast(e.message, "error");
+    state.scenario.params.provider = currentMapProvider === "google" ? "google_maps" : "mapbox";
+    $("#f-prov").value = state.scenario.params.provider;
+    markDirty();
+  });
   fitAll();
 }
 
@@ -243,7 +304,14 @@ function select(kind, id, fly = false) {
   }
   if (fly && map) {
     const p = state.scenario[kind].find((x) => x.id === id);
-    if (p) map.flyTo({ center: [p.lon, p.lat], zoom: Math.max(map.getZoom(), 12) });
+    if (p) {
+      if (currentMapProvider === "google") {
+        map.panTo({ lat: p.lat, lng: p.lon });
+        map.setZoom(Math.max(map.getZoom(), 12));
+      } else {
+        map.flyTo({ center: [p.lon, p.lat], zoom: Math.max(map.getZoom(), 12) });
+      }
+    }
   }
 }
 
@@ -274,7 +342,11 @@ function createSearch(root) {
     if (q.length < 2) { close(); return; }
     const my = ++seq;
     const params = new URLSearchParams({ q, session });
-    if (map) { const c = map.getCenter(); params.set("lat", c.lat); params.set("lon", c.lng); }
+    if (map) {
+      const c = map.getCenter();
+      params.set("lat", currentMapProvider === "google" ? c.lat() : c.lat);
+      params.set("lon", currentMapProvider === "google" ? c.lng() : c.lng);
+    }
     try {
       const res = await api(`/api/search/suggest?${params}`);
       if (my !== seq) return;
@@ -475,7 +547,7 @@ function changeMapStyle(styleId) {
   if (!Object.hasOwn(MAP_STYLES, styleId) || styleId === activeMapStyle) return;
   activeMapStyle = styleId;
   try { localStorage.setItem("mapStyle", activeMapStyle); } catch { /* 保存できなくても動く */ }
-  if (map) map.setStyle(MAP_STYLES[activeMapStyle].url);
+  if (map && currentMapProvider === "mapbox") map.setStyle(MAP_STYLES[activeMapStyle].url);
 }
 
 function addMapLayers() {
@@ -492,25 +564,128 @@ function addMapLayers() {
   if (!map.getSource("routes")) {
     map.addSource("routes", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
   }
+  if (!map.getLayer("routes-casing")) {
+    map.addLayer({
+      id: "routes-casing", type: "line", source: "routes",
+      filter: ["has", "speed"],
+      paint: {
+        "line-color": "#161616",
+        "line-width": ["case", ["get", "sel"], 10, ["has", "speed"], 8, 5],
+        "line-opacity": ["case", ["get", "dim"], 0.12, 0.9],
+      },
+      layout: { "line-cap": "round", "line-join": "round", "line-sort-key": ["case", ["get", "sel"], 1, 0] },
+    });
+  }
   if (!map.getLayer("routes")) {
     map.addLayer({
       id: "routes", type: "line", source: "routes",
       paint: {
         "line-color": ["get", "color"],
-        "line-width": ["case", ["get", "sel"], 5, 2.5],
-        "line-opacity": ["case", ["get", "dim"], 0.12, 0.85],
+        "line-width": ["case", ["all", ["get", "sel"], ["has", "speed"]], 7, ["has", "speed"], 5, ["get", "sel"], 5, 2.5],
+        "line-opacity": ["case", ["get", "dim"], 0.12, 1],
       },
       layout: { "line-cap": "round", "line-join": "round", "line-sort-key": ["case", ["get", "sel"], 1, 0] },
     });
   }
 }
 
-function initMap(token) {
-  mapboxgl.accessToken = token;
+function getMapView() {
+  if (!map) return { center: [139.55, 36.05], zoom: 8.5 };
+  if (currentMapProvider === "google") {
+    const center = map.getCenter();
+    return center ? { center: [center.lng(), center.lat()], zoom: map.getZoom() || 8.5 }
+      : { center: [139.55, 36.05], zoom: 8.5 };
+  }
+  const center = map.getCenter();
+  return { center: [center.lng, center.lat], zoom: map.getZoom() };
+}
+
+async function loadGoogleMapsApi() {
+  if (!state.config.google_maps_api_key_configured) {
+    if (!await askGoogleMapsKey()) throw new Error("Google Maps API キーが設定されていません");
+  }
+  if (!state.config.google_maps_js_api_key_configured) {
+    if (!await askGoogleMapsJsKey()) throw new Error("Google Maps JavaScript API キーが設定されていません");
+  }
+  if (!googleMapsApiPromise) {
+    googleMapsApiPromise = (async () => {
+      if (!window.google || !window.google.maps || !window.google.maps.importLibrary) {
+        const { api_key } = await api("/api/google-maps-js-key");
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error(
+            "Google Maps JavaScript API の読み込みがタイムアウトしました。APIキーと有効化状態を確認してください。",
+          )), 15000);
+          window.__depotPlannerGoogleMapsReady = () => {
+            clearTimeout(timer);
+            resolve();
+          };
+          window.gm_authFailure = () => toast(
+            "Google Maps JavaScript API の認証に失敗しました。APIキー制限と請求先設定を確認してください。",
+            "error",
+          );
+          const script = document.createElement("script");
+          script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(api_key)}&callback=__depotPlannerGoogleMapsReady&loading=async&v=weekly`;
+          script.async = true;
+          script.onerror = () => {
+            clearTimeout(timer);
+            reject(new Error("Google Maps JavaScript API を読み込めません。Maps JavaScript API の有効化とAPIキー制限を確認してください。"));
+          };
+          document.head.appendChild(script);
+        });
+      }
+      await google.maps.importLibrary("maps");
+      await google.maps.importLibrary("marker");
+    })().catch((e) => {
+      googleMapsApiPromise = null;
+      throw e;
+    });
+  }
+  return googleMapsApiPromise;
+}
+
+function updateMapModeControls(provider) {
+  const isGoogle = provider === "google";
+  $(".map-style-select").hidden = isGoogle;
+  for (const kind of ["targets", "candidates"]) {
+    const panel = $(`[data-panel="${kind}"]`);
+    const search = $(".search", panel);
+    const hint = search.nextElementSibling;
+    if (!hint.dataset.defaultText) hint.dataset.defaultText = hint.textContent;
+    search.hidden = isGoogle;
+    hint.textContent = isGoogle
+      ? "Google Maps表示中は地点検索を停止しています。地図をクリックすると座標で追加できます。検索を使う場合はMapbox取得元に切り替えてください。"
+      : hint.dataset.defaultText;
+  }
+}
+
+function removeMap() {
+  for (const kind of ["targets", "candidates"]) {
+    markers[kind].forEach((marker) => marker.remove());
+    markers[kind].clear();
+  }
+  for (const layer of ["links", "routes"]) {
+    googleMapLines[layer].forEach((line) => line.setMap(null));
+    googleMapLines[layer] = [];
+  }
+  if (popup) {
+    if (currentMapProvider === "google") popup.close();
+    else popup.remove();
+    popup = null;
+  }
+  if (currentMapProvider === "mapbox" && map) map.remove();
+  if (currentMapProvider === "google" && map) {
+    google.maps.event.clearInstanceListeners(map);
+    $("#map").replaceChildren();
+  }
+  map = null;
+}
+
+function initMapbox(view) {
+  mapboxgl.accessToken = mapboxToken;
   map = new mapboxgl.Map({
     container: "map",
     style: MAP_STYLES[activeMapStyle].url,
-    center: [139.55, 36.05], zoom: 8.5, language: "ja",
+    center: view.center, zoom: view.zoom, language: "ja",
   });
   map.addControl(new mapboxgl.NavigationControl(), "top-right");
   map.addControl(new mapboxgl.ScaleControl(), "bottom-right");
@@ -520,19 +695,66 @@ function initMap(token) {
   });
   map.on("load", () => {
     renderMarkers();
-    fitAll();
   });
   map.on("click", onMapClick);
 }
 
+async function switchMapProvider(provider) {
+  const nextProvider = provider === "google_maps" ? "google" : "mapbox";
+  if (currentMapProvider === nextProvider && map) return;
+  if (nextProvider === "google") await loadGoogleMapsApi();
+  const view = getMapView();
+  if (state.result) {
+    state.result = null;
+    state.resultJob = null;
+    state.routeLines = null;
+    state.resultStale = false;
+    state.vehicle = null;
+    renderResults();
+  }
+  removeMap();
+  currentMapProvider = nextProvider;
+  updateMapModeControls(nextProvider);
+  if (nextProvider === "google") {
+    map = new google.maps.Map($("#map"), {
+      center: { lat: view.center[1], lng: view.center[0] },
+      zoom: view.zoom,
+      mapId: "DEMO_MAP_ID",
+      mapTypeControl: true,
+      mapTypeControlOptions: { style: google.maps.MapTypeControlStyle.DROPDOWN_MENU },
+      streetViewControl: false,
+    });
+    map.addListener("click", onMapClick);
+    renderMarkers();
+  } else {
+    initMapbox(view);
+  }
+}
+
 let popup = null;
 async function onMapClick(e) {
-  const { lng, lat } = e.lngLat;
-  if (popup) popup.remove();
-  popup = new mapboxgl.Popup({ closeOnClick: true, maxWidth: "300px" })
-    .setLngLat([lng, lat]).setHTML(`<div class="muted">地点情報を取得中…</div>`).addTo(map);
+  const clickedProvider = currentMapProvider;
+  const lng = currentMapProvider === "google" ? e.latLng.lng() : e.lngLat.lng;
+  const lat = currentMapProvider === "google" ? e.latLng.lat() : e.lngLat.lat;
+  if (popup) {
+    if (currentMapProvider === "google") popup.close();
+    else popup.remove();
+  }
+  if (currentMapProvider === "google") {
+    popup = new google.maps.InfoWindow({
+      position: { lat, lng },
+      content: '<div class="muted">地点を追加できます</div>',
+    });
+    popup.open({ map });
+  } else {
+    popup = new mapboxgl.Popup({ closeOnClick: true, maxWidth: "300px" })
+      .setLngLat([lng, lat]).setHTML(`<div class="muted">地点情報を取得中…</div>`).addTo(map);
+  }
   let place = { name: "", address: "", lat: +lat.toFixed(7), lon: +lng.toFixed(7) };
-  try { place = await api(`/api/search/reverse?lat=${lat}&lon=${lng}`); } catch { /* 名称なしで続行 */ }
+  if (clickedProvider !== "google") {
+    try { place = await api(`/api/search/reverse?lat=${lat}&lon=${lng}`); } catch { /* 名称なしで続行 */ }
+  }
+  if (clickedProvider !== currentMapProvider) return;
   if (!place.name) place.name = place.address || `${place.lat.toFixed(5)}, ${place.lon.toFixed(5)}`;
   const el = document.createElement("div");
   el.innerHTML = `<div><b>${esc(place.name)}</b></div>
@@ -544,9 +766,11 @@ async function onMapClick(e) {
     const b = ev.target.closest("button[data-k]");
     if (!b) return;
     addPoint(b.dataset.k, place);
-    popup.remove();
+    if (currentMapProvider === "google") popup.close();
+    else popup.remove();
   });
-  popup.setDOMContent(el);
+  if (currentMapProvider === "google") popup.setContent(el);
+  else popup.setDOMContent(el);
 }
 
 function resultIndex() {
@@ -611,22 +835,41 @@ function renderMarkers() {
 
 function addMarker(kind, p, el) {
   el.addEventListener("click", (e) => { e.stopPropagation(); showTab(kind); select(kind, p.id); });
-  const m = new mapboxgl.Marker({ element: el, draggable: true }).setLngLat([p.lon, p.lat]).addTo(map);
-  m.on("dragend", () => {
-    const ll = m.getLngLat();
+  let marker, getPosition;
+  if (currentMapProvider === "google") {
+    marker = new google.maps.marker.AdvancedMarkerElement({
+      map, position: { lat: p.lat, lng: p.lon }, content: el, gmpDraggable: true, title: p.name,
+    });
+    getPosition = () => {
+      const position = marker.position;
+      return {
+        lat: typeof position.lat === "function" ? position.lat() : position.lat,
+        lng: typeof position.lng === "function" ? position.lng() : position.lng,
+      };
+    };
+    marker.addListener("dragend", () => finishDrag());
+  } else {
+    marker = new mapboxgl.Marker({ element: el, draggable: true }).setLngLat([p.lon, p.lat]).addTo(map);
+    getPosition = () => marker.getLngLat();
+    marker.on("dragend", () => finishDrag());
+  }
+  function finishDrag() {
+    const ll = getPosition();
     p.lat = +ll.lat.toFixed(7);
-    p.lon = +ll.lng.toFixed(7);
+    p.lon = +(ll.lng ?? ll.lon).toFixed(7);
     p.mapbox_id = null;
     markDirty();
     renderList(kind);
     toast(`位置を変更しました: ${p.name}`);
-  });
-  markers[kind].set(p.id, m);
+  }
+  const adapter = currentMapProvider === "google"
+    ? { remove: () => { marker.map = null; }, getElement: () => el }
+    : marker;
+  markers[kind].set(p.id, adapter);
 }
 
 function renderLinks(ri) {
-  const src = map && map.getSource && map.getSource("links");
-  if (!src) return;
+  if (!map) return;
   renderRoutes(ri);
   const features = [];
   if (ri && !ri.routing) {   // ルートがあるときは担当の線ではなく順路の線を描く
@@ -641,10 +884,36 @@ function renderLinks(ri) {
       });
     }
   }
-  src.setData({ type: "FeatureCollection", features });
+  if (currentMapProvider === "google") {
+    drawGoogleLines("links", features);
+  } else {
+    const src = map.getSource("links");
+    if (src) src.setData({ type: "FeatureCollection", features });
+  }
 }
 
-// 車両ごとの順路を道路沿いの線で取得する。届くまで(や取得に失敗した車両)は直線で描く
+function drawGoogleLines(layer, features) {
+  googleMapLines[layer].forEach((line) => line.setMap(null));
+  googleMapLines[layer] = features.flatMap((feature) => {
+    const { color, sel, dim } = feature.properties;
+    const hasTraffic = layer === "routes" && Boolean(feature.properties.speed);
+    const path = feature.geometry.coordinates.map(([lng, lat]) => ({ lat, lng }));
+    const weight = hasTraffic ? (sel ? 7 : 5) : sel ? 5 : layer === "links" ? 2 : 2.5;
+    const lines = [];
+    if (hasTraffic) {
+      lines.push(new google.maps.Polyline({
+        map, path, strokeColor: "#161616", strokeWeight: weight + 3, strokeOpacity: dim ? 0.12 : 0.9,
+      }));
+    }
+    lines.push(new google.maps.Polyline({
+      map, path, strokeColor: color, strokeWeight: weight,
+      strokeOpacity: dim ? 0.12 : layer === "links" ? 0.75 : 1,
+    }));
+    return lines;
+  });
+}
+
+// 車両ごとの順路を道路沿いの線で取得する。取得に失敗した車両は直線で描く
 async function loadRouteLines(jobId) {
   let g;
   try { g = await api(`/api/runs/${jobId}/geometry`); }
@@ -653,26 +922,50 @@ async function loadRouteLines(jobId) {
   state.routeLines = new Map(Object.entries(g.vehicles).filter(([, line]) => line).map(([no, line]) => [+no, line]));
   if (g.errors.length) toast(`一部の車両は直線で表示しています: ${g.errors[0]}`, "warning");
   renderRoutes(resultIndex());
+  renderLegend(resultIndex());
 }
 
 // 車両ごとの順路: 待機拠点 → 立ち寄り順。道路沿いの線があればそれを、無ければ直線で結ぶ
 function renderRoutes(ri) {
-  const src = map.getSource("routes");
-  if (!src) return;
+  if (!map) return;
   const features = [];
   if (ri && ri.routing) {
     for (const v of ri.routing.vehicles) {
-      const coords = (state.routeLines && state.routeLines.get(v.no))
-        || [[v.start_lon, v.start_lat], ...v.stops.map((st) => [st.lon, st.lat])];
+      const line = state.routeLines && state.routeLines.get(v.no);
+      const fallback = [[v.start_lon, v.start_lat], ...v.stops.map((st) => [st.lon, st.lat])];
       const sel = state.vehicle === v.no;
-      features.push({
-        type: "Feature",
-        properties: { color: (ri.depots.get(v.start_id) || { color: OTHER }).color, sel, dim: state.vehicle != null && !sel },
-        geometry: { type: "LineString", coordinates: coords },
-      });
+      const depotColor = (ri.depots.get(v.start_id) || { color: OTHER }).color;
+      const segments = currentMapProvider === "google" && line && !Array.isArray(line)
+        ? line.segments : null;
+      if (segments && segments.length) {
+        for (const segment of segments) {
+          features.push({
+            type: "Feature",
+            properties: {
+              color: TRAFFIC_COLORS[segment.speed] || depotColor,
+              speed: segment.speed,
+              sel,
+              dim: state.vehicle != null && !sel,
+            },
+            geometry: { type: "LineString", coordinates: segment.coordinates },
+          });
+        }
+      } else {
+        const coords = Array.isArray(line) ? line : fallback;
+        features.push({
+          type: "Feature",
+          properties: { color: depotColor, sel, dim: state.vehicle != null && !sel },
+          geometry: { type: "LineString", coordinates: coords },
+        });
+      }
     }
   }
-  src.setData({ type: "FeatureCollection", features });
+  if (currentMapProvider === "google") {
+    drawGoogleLines("routes", features);
+  } else {
+    const src = map.getSource("routes");
+    if (src) src.setData({ type: "FeatureCollection", features });
+  }
 }
 
 function selectVehicle(no) {
@@ -681,10 +974,17 @@ function selectVehicle(no) {
   renderMarkers();
   const v = state.vehicle != null && state.result.routing.vehicles.find((x) => x.no === state.vehicle);
   if (v && map) {
-    const b = new mapboxgl.LngLatBounds();
-    b.extend([v.start_lon, v.start_lat]);
-    v.stops.forEach((st) => b.extend([st.lon, st.lat]));
-    map.fitBounds(b, { padding: 80, maxZoom: 12, duration: 600 });
+    if (currentMapProvider === "google") {
+      const b = new google.maps.LatLngBounds();
+      b.extend({ lat: v.start_lat, lng: v.start_lon });
+      v.stops.forEach((st) => b.extend({ lat: st.lat, lng: st.lon }));
+      map.fitBounds(b, 80);
+    } else {
+      const b = new mapboxgl.LngLatBounds();
+      b.extend([v.start_lon, v.start_lat]);
+      v.stops.forEach((st) => b.extend([st.lon, st.lat]));
+      map.fitBounds(b, { padding: 80, maxZoom: 12, duration: 600 });
+    }
   }
 }
 
@@ -710,6 +1010,12 @@ function renderLegend(ri) {
     html += `<div class="li muted" style="margin-top:6px">採用拠点（線は${ri.routing ? "車両の順路" : "担当"}）</div>` +
       [...ri.depots.values()].map((d) => `<div class="li"><span class="sw" style="background:${d.color}">${d.letter}</span>${esc(d.d.name)}</div>`).join("");
   }
+  if (state.result && state.result.provider === "google_maps" && state.result.params.profile.startsWith("driving")) {
+    html += `<div class="li muted" style="margin-top:6px">Google交通状況</div>
+      <div class="li"><span class="traffic-line" style="--traffic-color:${TRAFFIC_COLORS.NORMAL}"></span>通常</div>
+      <div class="li"><span class="traffic-line" style="--traffic-color:${TRAFFIC_COLORS.SLOW}"></span>低速</div>
+      <div class="li"><span class="traffic-line" style="--traffic-color:${TRAFFIC_COLORS.TRAFFIC_JAM}"></span>渋滞</div>`;
+  }
   el.innerHTML = html;
 }
 
@@ -717,6 +1023,12 @@ function fitAll() {
   if (!map || !state.scenario) return;
   const pts = [...state.scenario.targets, ...state.scenario.candidates];
   if (!pts.length) return;
+  if (currentMapProvider === "google") {
+    const b = new google.maps.LatLngBounds();
+    pts.forEach((p) => b.extend({ lat: p.lat, lng: p.lon }));
+    map.fitBounds(b, 60);
+    return;
+  }
   const b = new mapboxgl.LngLatBounds();
   pts.forEach((p) => b.extend([p.lon, p.lat]));
   map.fitBounds(b, { padding: 60, maxZoom: 13, duration: 600 });
@@ -728,9 +1040,35 @@ function fitAll() {
 async function runSimulation() {
   if (state.job) return;
   readParams();
+  let clearCache = false;
+  if (state.scenario.params.provider === "google_maps") {
+    const confirmed = await modal({
+      title: "Google Mapsから最新情報を取得",
+      body: `<p>実行のたびにGoogle Routes APIへアクセスし、渋滞情報を含む所要時間とルートを取得します。Google Mapsの取得結果はキャッシュしません。</p>
+        <p class="hint">API利用料が発生します。</p>`,
+      buttons: [
+        { label: "キャンセル", value: null },
+        { label: "取得して実行", value: "run", primary: true },
+      ],
+    });
+    if (confirmed === null) return;
+  } else {
+    clearCache = await modal({
+      title: "所要時間キャッシュ",
+      body: `<p>有効期限内のキャッシュを使って実行するか、全取得元のキャッシュを消して取得し直すか選択してください。</p>
+        <p class="hint">キャッシュを消して実行すると、選択中の取得元へ全ペアを再リクエストします。API料金や実行時間が増える場合があります。</p>`,
+      buttons: [
+        { label: "キャンセル", value: null },
+        { label: "キャッシュを使う", value: false, primary: true },
+        { label: "消去して再取得", value: true, danger: true },
+      ],
+    });
+    if (clearCache === null) return;
+  }
   let job;
   try {
-    job = await api("/api/runs", { method: "POST", body: state.scenario });
+    job = await api(`/api/runs${clearCache ? "?clear_cache=true" : ""}`,
+      { method: "POST", body: state.scenario });
   } catch (e) {
     showTab("results");
     $("#results").innerHTML = notice("error", e.message);
@@ -796,7 +1134,10 @@ function renderResults() {
   const s = r.summary, p = r.params;
   const ri = new Map(r.depots.map((d, i) => [d.id, { letter: LETTERS[i] || "?", color: i < SERIES.length ? SERIES[i] : OTHER }]));
   const sw = (id) => { const d = ri.get(id); return d ? `<span class="sw" style="background:${d.color}">${d.letter}</span>` : ""; };
-  const profile = { driving: "自動車", "driving-traffic": "自動車(交通)", walking: "徒歩", cycling: "自転車" }[p.profile] || p.profile;
+  const googleProvider = r.provider === "google_maps";
+  const profile = googleProvider && ["driving", "driving-traffic"].includes(p.profile)
+    ? "自動車(渋滞考慮)"
+    : ({ driving: "自動車", "driving-traffic": "自動車(交通)", walking: "徒歩", cycling: "自転車" }[p.profile] || p.profile);
   const rt = r.routing;
 
   box.innerHTML = `
@@ -815,10 +1156,11 @@ function renderResults() {
       <div class="cds--tile tile"><div class="k">平均所要</div><div class="v">${fmt(s.avg_min)} 分</div></div>
       <div class="cds--tile tile"><div class="k">総所要</div><div class="v">${fmt(s.total_min)} 分</div></div>
       <div class="cds--tile tile"><div class="k">解法</div><div class="v">${s.method === "exact" ? "厳密解" : "近似解"}</div></div>
-      <div class="cds--tile tile"><div class="k">移動時間</div><div class="v" style="font-size:13px">${esc(r.provider)} / ${esc(profile)}</div></div>
+      <div class="cds--tile tile"><div class="k">移動時間</div><div class="v" style="font-size:13px">${esc(PROVIDER_LABEL[r.provider] || r.provider)} / ${esc(profile)}</div></div>
     </div>
     <div class="result-tools"><span class="cds--checkbox-wrapper"><input type="checkbox" class="cds--checkbox" id="toggle-result" ${state.showResult ? "checked" : ""}>
       <label for="toggle-result" class="cds--checkbox-label"><span class="cds--checkbox-label-text">地図に結果を表示</span></label></span></div>
+    ${googleProvider ? notice("info", "Google Mapsの所要時間と交通情報付きルートはキャッシュせず、実行レポートは通常どおり出力できます。") : ""}
     <div class="downloads">
       ${[["docx", "Word 報告書"], ["csv", "CSV（担当一覧）"], ...(rt ? [["routes", "CSV（順路）"]] : []), ["json", "JSON（全結果）"]]
         .map(([k, l]) => `<button class="cds--btn cds--btn--ghost cds--btn--sm" data-dl="${k}">${l}${icon("download", "cds--btn__icon")}</button>`).join("")}
@@ -1090,7 +1432,23 @@ function bindUi() {
     if (a === "import") importCsv(b.dataset.kind);
     if (a === "clear") clearAll(b.dataset.kind);
   }));
-  $("#params-form").addEventListener("input", () => { readParams(); markDirty(); });
+  $("#params-form").addEventListener("input", (e) => {
+    if (e.target.id === "f-prov") return;
+    readParams();
+    markDirty();
+  });
+  $("#f-prov").addEventListener("change", async (e) => {
+    const previousProvider = state.scenario.params.provider;
+    readParams();
+    try {
+      await switchMapProvider(e.target.value);
+      markDirty();
+    } catch (err) {
+      toast(err.message, "error");
+      state.scenario.params.provider = previousProvider;
+      e.target.value = previousProvider;
+    }
+  });
   $("#params-form").addEventListener("submit", (e) => e.preventDefault());
   $("#btn-run").addEventListener("click", runSimulation);
   $("#btn-cancel").addEventListener("click", () => { if (state.job) api(`/api/runs/${state.job.id}/cancel`, { method: "POST" }); });
@@ -1118,7 +1476,8 @@ async function init() {
   let token = state.config.token;
   if (!state.config.token_configured) token = await askToken();
   state.scenario = structuredClone(state.config.defaults);
-  initMap(token);
+  mapboxToken = token;
+  await switchMapProvider(state.scenario.params.provider);
 
   let last = null;
   try { last = localStorage.getItem("lastScenario"); } catch { /* 無視 */ }

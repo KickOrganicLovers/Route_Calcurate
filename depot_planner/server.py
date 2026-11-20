@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, mapbox_api, report, runner
+from . import config, google_maps_api, mapbox_api, report, runner
 from . import scenario as scn
 from .solver import Cancelled
 
@@ -33,10 +33,16 @@ class TokenIn(BaseModel):
     token: str
 
 
+class GoogleMapsApiKeyIn(BaseModel):
+    api_key: str
+
+
 @app.get("/api/config")
 def get_config():
     token = config.get_token()
     return {"token_configured": bool(token), "token": token or "",
+            "google_maps_api_key_configured": bool(config.get_google_maps_api_key()),
+            "google_maps_js_api_key_configured": bool(config.get_google_maps_js_api_key()),
             "defaults": scn.new_scenario(), "statuses": scn.STATUS_LABEL}
 
 
@@ -48,6 +54,32 @@ def set_token(body: TokenIn):
         raise HTTPException(400, msg)
     config.save_token(token)
     return {"ok": True, "message": f"{config.ENV_PATH} に保存しました", "token": token}
+
+
+@app.post("/api/google-maps-key")
+def set_google_maps_api_key(body: GoogleMapsApiKeyIn):
+    api_key = body.api_key.strip()
+    if not api_key:
+        raise HTTPException(400, "Google Maps API キーを入力してください")
+    config.save_google_maps_api_key(api_key)
+    return {"ok": True, "google_maps_api_key_configured": True}
+
+
+@app.get("/api/google-maps-js-key")
+def get_google_maps_js_key():
+    api_key = config.get_google_maps_js_api_key()
+    if not api_key:
+        raise HTTPException(404, "Google Maps API キーが未設定です")
+    return {"api_key": api_key}
+
+
+@app.post("/api/google-maps-js-key")
+def set_google_maps_js_api_key(body: GoogleMapsApiKeyIn):
+    api_key = body.api_key.strip()
+    if not api_key:
+        raise HTTPException(400, "Google Maps JavaScript API キーを入力してください")
+    config.save_google_maps_js_api_key(api_key)
+    return {"ok": True, "google_maps_js_api_key_configured": True}
 
 
 # ---------------------------------------------------------------------------
@@ -118,12 +150,13 @@ JOBS = {}
 _jobs_lock = threading.Lock()
 
 
-def _run_job(job, sc):
+def _run_job(job, sc, clear_cache=False):
     def progress(frac, msg):
         job["progress"], job["message"] = round(frac, 4), msg
 
     try:
-        result = runner.run_scenario(sc, progress=progress, cancel=lambda: job["cancel"])
+        result = runner.run_scenario(sc, progress=progress, cancel=lambda: job["cancel"],
+                                     clear_cache=clear_cache)
         job["result"] = result
         job["run_dir"] = str(report.save_all(result, docx=False))
         job["status"], job["progress"], job["message"] = "done", 1.0, "完了"
@@ -138,7 +171,7 @@ def _run_job(job, sc):
 
 
 @app.post("/api/runs")
-def start_run(body: dict):
+def start_run(body: dict, clear_cache: bool = False):
     try:
         sc = scn.normalize(body)
     except (KeyError, TypeError, ValueError) as e:
@@ -151,7 +184,7 @@ def start_run(body: dict):
            "cancel": False, "result": None, "error": None, "started_at": time.time()}
     with _jobs_lock:
         JOBS[job_id] = job
-    threading.Thread(target=_run_job, args=(job, sc), daemon=True).start()
+    threading.Thread(target=_run_job, args=(job, sc, clear_cache), daemon=True).start()
     return {"id": job_id}
 
 
@@ -182,9 +215,17 @@ def _vehicle_line(v, profile):
         return v["no"], None, str(e)
 
 
+def _google_vehicle_line(v, profile):
+    points = [(v["start_lat"], v["start_lon"])] + [(s["lat"], s["lon"]) for s in v["stops"]]
+    try:
+        return v["no"], {"segments": google_maps_api.route_geometry(points, profile)}, None
+    except google_maps_api.GoogleMapsError as e:
+        return v["no"], None, str(e)
+
+
 @app.get("/api/runs/{job_id}/geometry")
 def run_geometry(job_id: str):
-    """車両ごとの順路を道路沿いの線で返す(Directions API)。取れなかった車両は null。
+    """車両ごとの順路を道路沿いの線で返す。取れなかった車両は null。
 
     結果ごとに 1 回だけ取得してジョブに覚えておく(地図の描画専用。保存はしない)。
     """
@@ -196,8 +237,9 @@ def run_geometry(job_id: str):
         if "geometry" not in job:
             vehicles = (result.get("routing") or {}).get("vehicles") or []
             profile = result["params"]["profile"]
+            get_line = _google_vehicle_line if result["provider"] == "google_maps" else _vehicle_line
             with ThreadPoolExecutor(max_workers=4) as pool:
-                rows = list(pool.map(lambda v: _vehicle_line(v, profile), vehicles))
+                rows = list(pool.map(lambda v: get_line(v, profile), vehicles))
             errors = sorted({e for _, _, e in rows if e})
             job["geometry"] = {"vehicles": {str(no): line for no, line, _ in rows},
                                "errors": errors}

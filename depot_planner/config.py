@@ -60,6 +60,8 @@ def ensure_data_dir():
 TOKEN_KEY = "MAPBOX_ACCESS_TOKEN"
 TOKEN_KEYS = (TOKEN_KEY, "NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN")
 TOKEN_CHECK_URL = "https://api.mapbox.com/tokens/v2"
+GOOGLE_MAPS_API_KEY = "GOOGLE_MAPS_API_KEY"
+GOOGLE_MAPS_JS_API_KEY = "GOOGLE_MAPS_JS_API_KEY"
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +112,58 @@ def save_token(token, env_path=ENV_PATH):
     env_path.write_text("\n".join(out) + "\n", encoding="utf-8")
     # 同じプロセス内の以降の呼び出しにも反映させる
     os.environ[TOKEN_KEY] = token
+
+
+def get_google_maps_api_key(env_path=ENV_PATH):
+    """環境変数 → .env の順に Google Maps API キーを探す。"""
+    if os.environ.get(GOOGLE_MAPS_API_KEY):
+        return os.environ[GOOGLE_MAPS_API_KEY].strip()
+    return read_env_file(env_path).get(GOOGLE_MAPS_API_KEY) or None
+
+
+def save_google_maps_api_key(api_key, env_path=ENV_PATH):
+    """.env の GOOGLE_MAPS_API_KEY 行を書き換える(他の行はそのまま残す)。"""
+    env_path = Path(env_path)
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+    out, replaced = [], False
+    for line in lines:
+        if line.split("=", 1)[0].strip() == GOOGLE_MAPS_API_KEY:
+            if not replaced:
+                out.append(f"{GOOGLE_MAPS_API_KEY}={api_key}")
+                replaced = True
+            continue
+        out.append(line)
+    if not replaced:
+        out.append(f"{GOOGLE_MAPS_API_KEY}={api_key}")
+    env_path.write_text("\n".join(out) + "\n", encoding="utf-8")
+    os.environ[GOOGLE_MAPS_API_KEY] = api_key
+
+
+def get_google_maps_js_api_key(env_path=ENV_PATH):
+    """環境変数 → .env の順に Google Maps JavaScript API キーを探す。"""
+    if os.environ.get(GOOGLE_MAPS_JS_API_KEY):
+        return os.environ[GOOGLE_MAPS_JS_API_KEY].strip()
+    return read_env_file(env_path).get(GOOGLE_MAPS_JS_API_KEY) or None
+
+
+def save_google_maps_js_api_key(api_key, env_path=ENV_PATH):
+    """.env の GOOGLE_MAPS_JS_API_KEY 行を書き換える(他の行はそのまま残す)。"""
+    env_path = Path(env_path)
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+    out, replaced = [], False
+    for line in lines:
+        if line.split("=", 1)[0].strip() == GOOGLE_MAPS_JS_API_KEY:
+            if not replaced:
+                out.append(f"{GOOGLE_MAPS_JS_API_KEY}={api_key}")
+                replaced = True
+            continue
+        out.append(line)
+    if not replaced:
+        out.append(f"{GOOGLE_MAPS_JS_API_KEY}={api_key}")
+    env_path.write_text("\n".join(out) + "\n", encoding="utf-8")
+    os.environ[GOOGLE_MAPS_JS_API_KEY] = api_key
 
 
 # ---------------------------------------------------------------------------

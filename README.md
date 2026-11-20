@@ -19,6 +19,9 @@ Mapbox のアクセストークン（`pk.` から始まるもの）は `.env` �
 （旧名 `NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN` も可）に置く。
 未設定なら起動時に入力を求められ（GUI は画面のダイアログ、CLI はターミナル）、検証したうえで `.env` に保存される。
 後から差し替えるときは `uv run depot-planner token --force`。
+Google Maps Routes API を使う場合は `.env` にサーバー用 `GOOGLE_MAPS_API_KEY` を設定する。
+Google取得元ではGoogle Mapsを表示するため、別途 `GOOGLE_MAPS_JS_API_KEY`（Maps JavaScript API用）が必要。
+ブラウザ用キーはMaps JavaScript APIのみに制限し、ローカル利用元 `http://127.0.0.1:8765/*` を許可する。
 
 ## GUI
 
@@ -29,13 +32,14 @@ uv run depot-planner gui          # http://127.0.0.1:8765/ がブラウザで開
 - **目的地 / 補給地点タブ**: 検索ボックスに施設名や住所を入れ、Mapbox の候補から選んで追加する。
   地図をクリックしてその地点を追加することもできる。マーカーはドラッグで位置を微調整できる。
   地図左上のプルダウンで Mapbox 提供の背景地図スタイル（道路・アウトドア・淡色・ダーク・航空写真）を選べる。マーカーやルート表示はそのまま（選択はブラウザに保存）。
+  条件で Google Maps Routes API を選ぶと地図表示も Google Maps に切り替わり、Mapbox 地図スタイルと地点検索は一時停止する。Google Mapsを選んだ場合は実行のたびにAPIへアクセスして、リクエスト時点の渋滞を考慮した所要時間と交通情報付きルートを取得する（キャッシュしないためAPI利用料が発生する）。Google取得元でも実行レポートやCSV/JSONを通常どおり出力できる。
   補給地点には「区分」（報告書の色分け）と「状態」（候補 / 必須 / 優先 / なるべく避ける / 除外）とメモを付けられる。
 - **条件タブ**: 採用数、優先 / なるべく避ける の許容幅（分）、作業時間・積込時間、移動手段、目的関数、感度分析の範囲、
   **ルート最適化（1 台に積める機材の数・1 台の配送上限・車両の総数・探索時間、
   選定とルートを一体で解くか・ルートで比べる組合せの数・比べるときの探索時間）**。
 - **結果タブ**: 最長所要時間、採用拠点と機材数・車両台数、**車両ごとの順路**（行を押すと地図でその車両を強調）、
   **ルートで比べた拠点の組合せ**（一体計算のとき）、採用数ごとの最長所要時間のグラフ（直行前提）、目的地ごとの担当。Word 報告書 / CSV / JSON をダウンロードできる。
-  地図には車両ごとの順路を Mapbox Directions API で取った道路沿いの線で描く（取得できない車両は立ち寄り順の直線）。
+  Mapbox取得元は Mapbox Directions API、Google取得元は Routes API で道路沿いの順路を描く（取得できない場合は直線）。Googleの自動車ルートは通常・低速・渋滞区間を緑・黄・赤で表示する。交通情報付きルート線は実行中だけ取得・表示し、保存しない（追加のAPI利用料が発生する場合がある）。
 - シナリオは「保存」で `scenarios/<名前>.json` に書き出される（CLI と共通）。
 
 ## デスクトップアプリ（Windows exe / macOS .app）
@@ -54,7 +58,7 @@ PyInstaller は動かした OS 向けにしか作れないので、配布物は 
 アプリに関わるファイルを変えて push するか、Actions タブの「package」→ Run workflow で Windows / macOS の zip が Artifacts に出る。
 `v0.3.0` のようなタグを push すると Releases にも添付される。
 
-- 動作には**インターネット接続が必要**（地図・検索・所要時間はすべて Mapbox）。
+- 動作には**インターネット接続が必要**（地図・検索・所要時間の取得元に応じて Mapbox / Google Maps を使用）。
 - パッケージ版のデータ（`.env` のトークン・シナリオ・実行結果・キャッシュ）は次のフォルダに置く。
   初回起動時に同梱のサンプルシナリオをコピーする。環境変数 `DEPOT_PLANNER_HOME` で変更できる。
   - Windows: `%APPDATA%\depot-planner`
@@ -74,6 +78,7 @@ uv run depot-planner run saitama_all33                      # 実行 → runs/<�
 uv run depot-planner run saitama_all33 --capacity 3         # 1 台に機材 3 個まで積める場合
 uv run depot-planner run saitama_all33 --capacity 2 --max-deliveries 4   # 2 個ずつ、積み直して最大 4 か所
 uv run depot-planner run saitama_all33 --vehicles 10        # 車両の総数を 10 台に固定（0 で自動）
+uv run depot-planner run saitama_all33 --clear-cache        # キャッシュを使わず全ペアを取得し直す
 uv run depot-planner run saitama_all33 --k 6 --no-routing   # 採用数だけ変えて選定のみ
 uv run depot-planner run saitama_all33 --capacity 3 --screen 12   # 一体計算で比べる組合せを 12 組に
 uv run depot-planner run saitama_all33 --capacity 3 --separate    # 選定 → ルートを分けて（従来方式）
@@ -84,7 +89,8 @@ uv run depot-planner add saitama_all33 --target "点34" --latlon 36.0,139.5
 uv run depot-planner new "新しいシナリオ"
 ```
 
-`run` の `--capacity` / `--max-deliveries` / `--vehicles` / `--time-limit` / `--no-routing` / `--k` はその実行だけの上書きで、
+`run` の `--clear-cache` は既存の所要時間キャッシュを使わず全ペアを取得し直す。`--no-fetch` とは同時に指定できない。
+`--capacity` / `--max-deliveries` / `--vehicles` / `--time-limit` / `--no-routing` / `--k` はその実行だけの上書きで、
 シナリオファイルは書き換えない。
 
 `runs/<日時_名前>/` には `result.json`（全結果）、`assignments.csv`（担当一覧）、
@@ -122,8 +128,8 @@ uv run depot-planner new "新しいシナリオ"
 | `targets[].enabled` | false なら計算から外す（削除せずに一時的に外したいとき） |
 | `candidates[].status` | `candidate`=選定対象 / `required`=必ず採用 / `preferred`=優先 / `avoid`=なるべく避ける / `excluded`=選定しない |
 | `params.preference_margin_min` | 優先 / なるべく避ける の許容幅[分]（既定 10）。最良の組合せとの差がこれ以内なら、担当を持つ「優先」拠点が多く、「なるべく避ける」拠点が少ない組合せを選ぶ |
-| `profile` | `driving` / `driving-traffic` / `walking` / `cycling` |
-| `provider` | `mapbox` / `osrm`（公開デモサーバ、driving のみ）/ `auto`（Mapbox が失敗したら OSRM） |
+| `profile` | `driving` / `driving-traffic` / `walking` / `cycling`（Google Mapsの自動車はどちらもリクエスト時点の交通状況を考慮） |
+| `provider` | `mapbox` / `google_maps` / `osrm`（公開デモサーバ、driving のみ）/ `auto`（Mapbox が失敗したら OSRM） |
 | `objective` | `makespan`=最も遅い車両を最小化 / `total`=全車両の合計を最小化（選定段階） |
 | `max_exact_combinations` | 組合せ数がこれ以下なら総当たりで厳密解、超えたら貪欲法＋入替え探索の近似解 |
 | `routing.enabled` | false ならルート最適化をせず選定だけ |
@@ -131,6 +137,10 @@ uv run depot-planner new "新しいシナリオ"
 | `routing.num_vehicles` | 車両の総数。`null` なら各拠点の機材を 1 回で積み切れる台数（自動）。指定すると機材数に比例して各拠点へ割り振る |
 | `routing.max_deliveries` | 1 台あたりの配送件数上限。`null` なら台数自動のとき積載量と同じ（積み直しなし）、台数指定のとき上限なし。大きくすると補給地点へ戻って積み直す往復を許す |
 | `routing.time_limit_sec` | ルート探索にかける秒数 |
+
+Google Maps取得元では、Routes API と Maps JavaScript API を有効にし、請求先を設定する必要がある。
+Routes API の所要時間と交通情報付きルートはキャッシュしない。実行レポート・グラフは通常どおり保存・書き出しできる。
+Google Maps Platform の[利用料金と利用条件](https://cloud.google.com/maps-platform/terms)を確認してから利用すること。
 
 ## モデル
 
@@ -152,10 +162,12 @@ uv run depot-planner new "新しいシナリオ"
 
 ## 所要時間のキャッシュ
 
-`cache/travel_times.json` に「地点 → 地点」の座標ペア単位で保存する。
-地点を追加しても、その地点に関わるペアだけを Mapbox Matrix API から取得する。
+`cache/travel_times.json` に Mapbox / OSRM の「地点 → 地点」の座標ペア単位で保存する。
+取得時刻もペアごとに記録し、30日経過したデータは期限切れとして再取得する。Google Maps Routes API の結果は毎回取得し、キャッシュしない。
+地点を追加しても、その地点に関わる不足ペアだけを取得する。
 ルート最適化では「目的地 → 目的地」「目的地 → 補給地点」も必要なので、採用拠点と目的地の全ペアを使う。
-`--no-fetch` を付けるとキャッシュだけで計算する（足りないペアがあればエラー）。
+GUIでは実行前にキャッシュを使うか全消去して再取得するか選べる。CLIでは`--clear-cache`で全消去して再取得する。
+`--no-fetch` を付けると有効なMapbox / OSRMキャッシュだけで計算する（不足または期限切れのペアがあればエラー）。
 
 ## ファイル構成
 

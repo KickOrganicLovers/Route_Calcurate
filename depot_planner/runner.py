@@ -18,7 +18,7 @@ from . import integrated as itg
 from . import scenario as scn
 from .routing import allocate_vehicles, solve_routes
 from .solver import evaluate, solve
-from .travel_times import UNREACHABLE, build_matrix
+from .travel_times import PairCache, UNREACHABLE, build_matrix
 
 
 class ScenarioError(ValueError):
@@ -32,7 +32,7 @@ def _stage(progress, lo, hi):
     return lambda frac, msg: progress(lo + (hi - lo) * max(0.0, min(frac, 1.0)), msg)
 
 
-def run_scenario(sc, progress=None, cancel=None, allow_fetch=True):
+def run_scenario(sc, progress=None, cancel=None, allow_fetch=True, clear_cache=False):
     sc = scn.normalize(sc)
     errors = scn.validate(sc)
     if errors:
@@ -56,10 +56,11 @@ def run_scenario(sc, progress=None, cancel=None, allow_fetch=True):
     # 1. 所要時間
     if progress:
         progress(0.0, "所要時間を準備中")
+    travel_time_cache = PairCache(clear=clear_cache and p["provider"] != "google_maps")
     move, provider, fetched = build_matrix(
         [(c["lat"], c["lon"]) for c in cands], [(t["lat"], t["lon"]) for t in targets],
         profile=p["profile"], provider=p["provider"], allow_fetch=allow_fetch,
-        progress=_stage(progress, 0.0, sel_lo))
+        progress=_stage(progress, 0.0, sel_lo), cache=travel_time_cache)
     cost = move + float(p["reload_min"]) + float(p["service_min"])
     cost[move >= UNREACHABLE] = UNREACHABLE
 
@@ -99,7 +100,8 @@ def run_scenario(sc, progress=None, cancel=None, allow_fetch=True):
     plan = None
     if unified:
         plan = _run_integrated(p, cands, targets, cost, main["alternatives"], provider,
-                               allow_fetch, preferred, avoid, margin, progress, cancel)
+                               allow_fetch, preferred, avoid, margin, progress, cancel,
+                               travel_time_cache)
         if plan["route"] is None:
             warnings.append("ルート最適化で解が見つかりませんでした(探索時間を延ばしてください)。"
                             "選定は直行前提の結果です")
@@ -172,7 +174,7 @@ def run_scenario(sc, progress=None, cancel=None, allow_fetch=True):
                 f"(直行前提の 1 位の組合せはルートで最長 {integration['screened'][0]['route_makespan_min']} 分)")
     elif rt.get("enabled") and not unified:
         routing = _run_routing(p, cands, targets, depots, provider, allow_fetch,
-                               progress, cancel)
+                               progress, cancel, travel_time_cache)
         if routing is None:
             warnings.append("ルート最適化で解が見つかりませんでした(探索時間を延ばしてください)")
 
@@ -326,13 +328,14 @@ def _shape_integration(plan, cands, rt, objective):
 
 
 def _run_integrated(p, cands, targets, cost, alternatives, provider, allow_fetch,
-                    preferred, avoid, margin, progress, cancel):
+                    preferred, avoid, margin, progress, cancel, cache):
     rt = p["routing"]
     points = [(c["lat"], c["lon"]) for c in cands] + [(t["lat"], t["lon"]) for t in targets]
     if progress:
         progress(0.4, "ルート用の所要時間を準備中")
     tmat, _, _ = build_matrix(points, points, profile=p["profile"], provider=provider,
-                              allow_fetch=allow_fetch, progress=_stage(progress, 0.4, 0.45))
+                              allow_fetch=allow_fetch, progress=_stage(progress, 0.4, 0.45),
+                              cache=cache)
     return itg.plan(np.asarray(tmat, dtype=float), cost, alternatives,
                     objective=p["objective"], capacity=int(rt["vehicle_capacity"]),
                     max_deliveries=rt.get("max_deliveries"), num_vehicles=rt.get("num_vehicles"),
@@ -343,7 +346,7 @@ def _run_integrated(p, cands, targets, cost, alternatives, provider, allow_fetch
                     progress=_stage(progress, 0.45, 1.0), cancel=cancel)
 
 
-def _run_routing(p, cands, targets, depots, provider, allow_fetch, progress, cancel):
+def _run_routing(p, cands, targets, depots, provider, allow_fetch, progress, cancel, cache):
     """採用拠点の機材数を前提に、各車両の順路を求めて結果 dict に整形する。"""
     rt = p["routing"]
     used = [d for d in depots if d["stock"] > 0]
@@ -353,7 +356,8 @@ def _run_routing(p, cands, targets, depots, provider, allow_fetch, progress, can
     if progress:
         progress(0.5, "ルート用の所要時間を準備中")
     tmat, _, _ = build_matrix(points, points, profile=p["profile"], provider=provider,
-                              allow_fetch=allow_fetch, progress=_stage(progress, 0.5, 0.55))
+                              allow_fetch=allow_fetch, progress=_stage(progress, 0.5, 0.55),
+                              cache=cache)
     res = solve_routes(tmat, [d["stock"] for d in used],
                        capacity=int(rt["vehicle_capacity"]),
                        max_deliveries=rt.get("max_deliveries"),
@@ -429,9 +433,14 @@ def format_text(result):
     s = result["summary"]
     p = result["params"]
     rt = result.get("routing")
+    provider_label = {"google_maps": "Google Maps Routes API"}.get(
+        result["provider"], result["provider"])
+    profile_label = p["profile"]
+    if result["provider"] == "google_maps" and profile_label in ("driving", "driving-traffic"):
+        profile_label = f"{profile_label} (TRAFFIC_AWARE)"
     lines = [
         f"シナリオ: {result['scenario_name']}  ({result['run_at']})",
-        f"所要時間: {result['provider']} / {p['profile']}  "
+        f"所要時間: {provider_label} / {profile_label}  "
         f"作業 {p['service_min']} 分・積込 {p['reload_min']} 分  目的関数 {p['objective']}",
         f"目的地 {s['num_targets']} 件 / 選定対象 {s['num_candidates']} 件"
         f"(除外 {s['num_excluded']} 件)から {s['num_depots']} 拠点を採用"
