@@ -46,6 +46,10 @@ DEFAULT_PARAMS = {
         "max_deliveries": None,     # 1 台あたりの配送件数上限。None = 台数自動なら積載量と同じ(積み直しなし)、
                                     #   台数指定なら上限なし
         "time_limit_sec": 30,       # 探索時間[秒]
+        # 選定とルートを一体で解く(integrated.py)。False なら 選定 → ルート を 1 回ずつ
+        "integrated": True,
+        "screen_candidates": 8,     # ルートで比べる拠点の組合せの数(直行前提の上位から)
+        "screen_time_sec": 2,       # 比べるときの 1 組・1 方式あたりの探索時間[秒]
     },
 }
 NESTED_PARAMS = ("sensitivity", "routing")
@@ -144,6 +148,12 @@ def validate(sc):
                           "(台数か配送上限を増やすか、配送上限を空欄にしてください)")
         if not _is_int(tl) or not 1 <= tl <= 3600:
             errors.append("ルート探索時間は 1〜3600 秒の整数にしてください")
+        if rt.get("integrated", True):
+            sc_n, sc_t = rt.get("screen_candidates", 8), rt.get("screen_time_sec", 2)
+            if not _is_int(sc_n) or not 1 <= sc_n <= 50:
+                errors.append("ルートで比べる組合せの数は 1〜50 の整数にしてください")
+            if not _is_int(sc_t) or not 1 <= sc_t <= 600:
+                errors.append("比較時の探索時間は 1〜600 秒の整数にしてください")
     for kind, items in (("目的地", sc["targets"]), ("補給地点", sc["candidates"])):
         ids = [x["id"] for x in items]
         if len(ids) != len(set(ids)):

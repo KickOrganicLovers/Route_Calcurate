@@ -101,11 +101,11 @@
             <div class="cds--form-item"><label class="cds--label" for="f-svc">作業時間（分）</label><input id="f-svc" class="cds--text-input" name="service_min" type="number" min="0" step="0.5"></div>
             <div class="cds--form-item"><label class="cds--label" for="f-rl">積込時間（分）</label><input id="f-rl" class="cds--text-input" name="reload_min" type="number" min="0" step="0.5"></div>
           </div>
-          <p class="hint">選定では、各目的地へ補給地点から直行する前提（積込 + 移動 + 作業）で評価し、各拠点に置く機材の数を決めます。</p>
+          <p class="hint">選定では、各目的地へ補給地点から直行する前提（積込 + 移動 + 作業）で評価します。ルート最適化を「一体で解く」にすると、直行前提の上位の組合せを実際のルートで比べ直し、各拠点に置く機材の数もルートの結果で決めます。</p>
         </fieldset>
         <fieldset class="cds--fieldset">
           <legend class="cds--label legend">ルート最適化</legend>
-          <div class="cds--checkbox-wrapper"><input id="f-rt" class="cds--checkbox" name="rt_enabled" type="checkbox"><label for="f-rt" class="cds--checkbox-label"><span class="cds--checkbox-label-text">選定後に車両ごとの順路も計算する</span></label></div>
+          <div class="cds--checkbox-wrapper"><input id="f-rt" class="cds--checkbox" name="rt_enabled" type="checkbox"><label for="f-rt" class="cds--checkbox-label"><span class="cds--checkbox-label-text">車両ごとの順路も計算する</span></label></div>
           <div class="row2">
             <div class="cds--form-item"><label class="cds--label" for="f-cap">1 台に積める機材の数</label><input id="f-cap" class="cds--text-input" name="rt_capacity" type="number" min="1" step="1"></div>
             <div class="cds--form-item"><label class="cds--label" for="f-md">1 台の配送上限</label><input id="f-md" class="cds--text-input" name="rt_max_deliveries" type="number" min="1" step="1" placeholder="積載量と同じ"></div>
@@ -113,6 +113,11 @@
           <div class="row2">
             <div class="cds--form-item"><label class="cds--label" for="f-nv">車両の総数</label><input id="f-nv" class="cds--text-input" name="rt_num_vehicles" type="number" min="1" step="1" placeholder="自動"></div>
             <div class="cds--form-item"><label class="cds--label" for="f-tl">探索時間（秒）</label><input id="f-tl" class="cds--text-input" name="rt_time_limit" type="number" min="1" max="3600" step="1"></div>
+          </div>
+          <div class="cds--checkbox-wrapper"><input id="f-itg" class="cds--checkbox" name="rt_integrated" type="checkbox"><label for="f-itg" class="cds--checkbox-label"><span class="cds--checkbox-label-text">補給地点の選定とルートを一体で解く（推奨）</span></label></div>
+          <div class="row2">
+            <div class="cds--form-item"><label class="cds--label" for="f-scn">ルートで比べる組合せの数</label><input id="f-scn" class="cds--text-input" name="rt_screen_candidates" type="number" min="1" max="50" step="1"></div>
+            <div class="cds--form-item"><label class="cds--label" for="f-sct">比べるときの探索時間（秒/組）</label><input id="f-sct" class="cds--text-input" name="rt_screen_time" type="number" min="1" max="600" step="1"></div>
           </div>
           <p class="hint">車両の総数が空欄なら、各拠点の機材を 1 回で積み切れる台数の車両が待機します。総数を指定すると、その台数を機材数に比例して各拠点へ配置し、足りない分は補給地点へ戻って積み直します（このとき配送上限の空欄は「上限なし」）。配送上限を積載量より大きくすると、積み直しの往復も許します。</p>
         </fieldset>

@@ -418,12 +418,16 @@ function renderParams() {
   f.rt_max_deliveries.value = p.routing.max_deliveries ?? "";
   f.rt_num_vehicles.value = p.routing.num_vehicles ?? "";
   f.rt_time_limit.value = p.routing.time_limit_sec;
+  f.rt_integrated.checked = p.routing.integrated !== false;
+  f.rt_screen_candidates.value = p.routing.screen_candidates ?? 8;
+  f.rt_screen_time.value = p.routing.screen_time_sec ?? 2;
   syncRoutingInputs();
 }
 
 function syncRoutingInputs() {
   const f = $("#params-form");
-  for (const n of ["rt_capacity", "rt_max_deliveries", "rt_num_vehicles", "rt_time_limit"]) f[n].disabled = !f.rt_enabled.checked;
+  for (const n of ["rt_capacity", "rt_max_deliveries", "rt_num_vehicles", "rt_time_limit", "rt_integrated"]) f[n].disabled = !f.rt_enabled.checked;
+  for (const n of ["rt_screen_candidates", "rt_screen_time"]) f[n].disabled = !f.rt_enabled.checked || !f.rt_integrated.checked;
 }
 
 function readParams() {
@@ -447,6 +451,9 @@ function readParams() {
     max_deliveries: f.rt_max_deliveries.value === "" ? null : Math.round(num(f.rt_max_deliveries.value, 1)),
     num_vehicles: f.rt_num_vehicles.value === "" ? null : Math.round(num(f.rt_num_vehicles.value, 1)),
     time_limit_sec: Math.round(num(f.rt_time_limit.value, 30)),
+    integrated: f.rt_integrated.checked,
+    screen_candidates: Math.round(num(f.rt_screen_candidates.value, 8)),
+    screen_time_sec: Math.round(num(f.rt_screen_time.value, 2)),
   };
   syncRoutingInputs();
 }
@@ -799,7 +806,7 @@ function renderResults() {
     <div class="meta">${esc(r.scenario_name)} ・ ${esc(r.run_at)}</div>
     ${rt
       ? `<div class="hero"><span class="v">${fmt(rt.makespan_min)}</span><span class="u">分　最も遅い車両の所要時間（ルート最適化後）</span></div>
-         <div class="hero-sub">選定時点（各目的地へ直行する前提）の最長は ${fmt(s.makespan_min)} 分。拠点数を増やしても直行で ${fmt(s.lower_bound_min)} 分未満にはならない（${esc(s.bottleneck_target)} がボトルネック）</div>`
+         <div class="hero-sub">${s.integrated ? "補給地点の選定とルートを一体で計算。" : ""}この拠点の組合せで各目的地へ直行した場合の最長は ${fmt(s.direct_makespan_min ?? s.makespan_min)} 分。拠点数を増やしても直行で ${fmt(s.lower_bound_min)} 分未満にはならない（${esc(s.bottleneck_target)} がボトルネック）</div>`
       : `<div class="hero"><span class="v">${fmt(s.makespan_min)}</span><span class="u">分　最も遅い車両の所要時間</span></div>
          <div class="hero-sub">拠点数を増やしても ${fmt(s.lower_bound_min)} 分未満にはならない（${esc(s.bottleneck_target)} が最寄りの補給地点からも遠い）</div>`}
     <div class="tiles">
@@ -830,7 +837,14 @@ function renderResults() {
         <td class="n">${v.deliveries}</td><td class="n${v.time_min === rt.makespan_min ? " hl" : ""}">${fmt(v.time_min)}</td><td style="font-size:12px">${esc(routeText(v))}</td></tr>`).join("")}
       </tbody></table></div>` : ""}
 
-    ${r.sensitivity.length > 1 ? `<h3>採用数ごとの最長所要時間</h3><div class="chart" id="sens-chart"></div>
+    ${r.integration && r.integration.screened.length ? `<h3>ルートで比べた拠点の組合せ</h3>
+      <p class="hint" style="margin-top:0">直行前提の上位 ${r.integration.screened.length} 組を、それぞれ ${fmt(r.integration.screen_time_sec)} 秒のルート探索で比べました。★ が採用（本計算でさらに探索）。</p>
+      <div class="table-wrap"><table class="cds--data-table cds--data-table--sm"><thead><tr><th class="n">直行順位</th><th class="n">直行 最長(分)</th><th class="n">ルート 最長(分)</th><th class="n">ルート 総所要(分)</th><th>拠点</th></tr></thead><tbody>
+      ${r.integration.screened.map((x) => `<tr class="${x.chosen ? "hl" : ""}"><td class="n">${x.rank}${x.chosen ? " ★" : ""}</td><td class="n">${fmt(x.direct_makespan_min)}</td>
+        <td class="n">${x.route_makespan_min == null ? "解なし" : fmt(x.route_makespan_min)}</td><td class="n">${x.route_total_min == null ? "-" : fmt(x.route_total_min)}</td><td style="font-size:12px">${x.depots.map(esc).join(" / ")}</td></tr>`).join("")}
+      </tbody></table></div>` : ""}
+
+    ${r.sensitivity.length > 1 ? `<h3>採用数ごとの最長所要時間${rt ? "（直行前提）" : ""}</h3><div class="chart" id="sens-chart"></div>
       <details><summary>表で見る</summary><div class="table-wrap"><table class="cds--data-table cds--data-table--sm"><thead><tr><th class="n">拠点数</th><th class="n">最長(分)</th><th class="n">総所要(分)</th><th>採用拠点（機材数）</th></tr></thead><tbody>
       ${r.sensitivity.map((x) => `<tr class="${x.k === s.num_depots ? "hl" : ""}"><td class="n">${x.k}</td><td class="n">${fmt(x.makespan_min)}</td><td class="n">${fmt(x.total_min)}</td>
         <td>${x.depots.map((d) => `${esc(d.name)}(${d.stock})`).join(" / ")}</td></tr>`).join("")}

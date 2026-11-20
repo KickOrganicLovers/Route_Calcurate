@@ -5,6 +5,7 @@
     uv run depot-planner run scenarios/x.json     シナリオを実行して runs/ に保存
     uv run depot-planner run x --capacity 3       積載量を一時的に変えて実行
     uv run depot-planner run x --vehicles 10      車両の総数を 10 台にして実行
+    uv run depot-planner run x --separate         選定とルートを分けて(従来方式で)実行
     uv run depot-planner search "目吹出張所"       Mapbox で地点検索(座標付き)
     uv run depot-planner add scenarios/x.json --candidate "目吹出張所" --group 国交省
     uv run depot-planner new "新しいシナリオ"      空のシナリオを作成
@@ -85,6 +86,12 @@ def cmd_run(a):
         rt["num_vehicles"] = a.vehicles or None      # 0 なら自動に戻す
     if a.time_limit is not None:
         rt["time_limit_sec"] = a.time_limit
+    if a.separate:
+        rt["integrated"] = False
+    if a.screen is not None:
+        rt["screen_candidates"] = a.screen
+    if a.screen_time is not None:
+        rt["screen_time_sec"] = a.screen_time
     if sc["params"]["provider"] in ("mapbox", "auto") and not a.no_fetch:
         config.ensure_token_interactive()
 
@@ -207,6 +214,10 @@ def main(argv=None):
                    help="車両の総数を一時的に上書き(0 で自動 = 各拠点で 1 回に積み切れる台数)")
     r.add_argument("--time-limit", type=int, metavar="SEC", help="ルート探索時間[秒]を一時的に上書き")
     r.add_argument("--no-routing", action="store_true", help="ルート最適化を行わず選定だけ")
+    r.add_argument("--separate", action="store_true",
+                   help="選定とルートを一体で解かず、従来どおり 選定 → ルート を 1 回ずつ")
+    r.add_argument("--screen", type=int, metavar="N", help="ルートで比べる拠点の組合せの数")
+    r.add_argument("--screen-time", type=int, metavar="SEC", help="比べるときの 1 組あたりの探索時間[秒]")
     r.add_argument("--out", help="保存先ディレクトリ(既定: runs/<日時_名前>)")
     r.add_argument("--json", action="store_true", help="結果を JSON で標準出力")
     r.add_argument("--no-save", action="store_true", help="runs/ に保存しない")

@@ -12,6 +12,8 @@
     その台数を機材数に比例して各補給地点へ割り振る(allocate_vehicles)。
     車両と補給地点に固定の所属はなく、在庫が残っていれば
     どの車両もどの補給地点から積んでよい。
+    pickup_limit を渡すと、各補給地点から積める上限を stock と別に指定できる
+    (選定とルートを一体で解くときは上限を目的地数にし、各拠点の機材数をルートの結果で決める)。
 
 目的:
     全車両のルート所要時間の最大値(メイクスパン)を最小化。
@@ -161,7 +163,7 @@ def _initial_routes(m, vehicle_depots, move, capacity, max_deliveries):
 
 def solve_routes(time, stock, capacity=1, max_deliveries=None, num_vehicles=None,
                  service_min=0.0, reload_min=0.0, time_limit_sec=30,
-                 progress=None, cancel=None):
+                 progress=None, cancel=None, pickup_limit=None):
     """各車両の順路を求める。
 
     time           : (k+n, k+n) の移動時間[分]。並びは [補給地点..., 目的地...]
@@ -171,6 +173,8 @@ def solve_routes(time, stock, capacity=1, max_deliveries=None, num_vehicles=None
                      台数自動のとき capacity と同じ(1 回の積込で配り切り、積み直さない)、
                      台数指定のとき上限なし(足りない分は積み直しで補う)
     num_vehicles   : 車両の総数。None なら各拠点で 1 回に積み切れる台数の合計
+    pickup_limit   : 補給地点ごとに積める機材の上限。None なら stock と同じ
+                     (stock は車両の待機配置にだけ使われる)
     戻り値: dict | None(解なし)
         makespan    : 最も遅い車両の所要時間[分]
         vehicles    : [{start, time_min, deliveries, stops}, ...]
@@ -181,8 +185,11 @@ def solve_routes(time, stock, capacity=1, max_deliveries=None, num_vehicles=None
     n = len(time) - k
     if capacity < 1:
         raise ValueError(f"積載量は 1 以上にしてください: {capacity}")
-    if sum(stock) < n:
-        raise ValueError(f"機材不足: 合計 {sum(stock)} < 目的地 {n}")
+    limit = list(stock) if pickup_limit is None else [int(x) for x in pickup_limit]
+    if len(limit) != k:
+        raise ValueError("pickup_limit の長さが補給地点の数と一致しません")
+    if sum(limit) < n:
+        raise ValueError(f"機材不足: 合計 {sum(limit)} < 目的地 {n}")
     if num_vehicles is not None and num_vehicles < 1:
         raise ValueError(f"車両の総数は 1 以上にしてください: {num_vehicles}")
     if max_deliveries is None:
@@ -194,7 +201,7 @@ def solve_routes(time, stock, capacity=1, max_deliveries=None, num_vehicles=None
     if max_deliveries * nv < n:
         raise ValueError(f"台数不足: {nv} 台 x 上限 {max_deliveries} 件 < 目的地 {n} 件")
 
-    m = build_node_model(k, n, stock, vehicle_depots)
+    m = build_node_model(k, n, limit, vehicle_depots)
 
     def move(p, q):
         if m.point[p] is None or m.point[q] is None:
