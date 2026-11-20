@@ -5,7 +5,9 @@
 1. **補給地点の選定** … 最も遅い車両の所要時間が最小になる補給地点の組合せを選び、各拠点に置く機材の数を決める
 2. **配分ルート最適化** … 1 台に積める機材の数（積載量）を踏まえ、Google OR-Tools で車両ごとの順路を決める
 
-を計算するツール。GUI と CLI の両方から、同じシナリオファイル（`scenarios/*.json`）を実行できる。
+を計算するツール。ルート最適化を有効にすると、1 と 2 を**一体で解く**（既定）。
+直行前提で選んだ上位の拠点の組合せを実際のルートで比べ直し、最長所要が最も短い組を採用する。
+各拠点に置く機材の数もルートで実際に積んだ個数で決まる。従来どおり 1 → 2 を 1 回ずつ流すには `--separate`。GUI と CLI の両方から、同じシナリオファイル（`scenarios/*.json`）を実行できる。
 
 ## セットアップ
 
@@ -29,9 +31,10 @@ uv run depot-planner gui          # http://127.0.0.1:8765/ がブラウザで開
   地図左上のプルダウンで Mapbox 提供の背景地図スタイル（道路・アウトドア・淡色・ダーク・航空写真）を選べる。マーカーやルート表示はそのまま（選択はブラウザに保存）。
   補給地点には「区分」（報告書の色分け）と「状態」（候補 / 必須 / 優先 / なるべく避ける / 除外）とメモを付けられる。
 - **条件タブ**: 採用数、優先 / なるべく避ける の許容幅（分）、作業時間・積込時間、移動手段、目的関数、感度分析の範囲、
-  **ルート最適化（1 台に積める機材の数・1 台の配送上限・車両の総数・探索時間）**。
+  **ルート最適化（1 台に積める機材の数・1 台の配送上限・車両の総数・探索時間、
+  選定とルートを一体で解くか・ルートで比べる組合せの数・比べるときの探索時間）**。
 - **結果タブ**: 最長所要時間、採用拠点と機材数・車両台数、**車両ごとの順路**（行を押すと地図でその車両を強調）、
-  採用数ごとの最長所要時間のグラフ、目的地ごとの担当。Word 報告書 / CSV / JSON をダウンロードできる。
+  **ルートで比べた拠点の組合せ**（一体計算のとき）、採用数ごとの最長所要時間のグラフ（直行前提）、目的地ごとの担当。Word 報告書 / CSV / JSON をダウンロードできる。
   地図には車両ごとの順路を Mapbox Directions API で取った道路沿いの線で描く（取得できない車両は立ち寄り順の直線）。
 - シナリオは「保存」で `scenarios/<名前>.json` に書き出される（CLI と共通）。
 
@@ -72,6 +75,8 @@ uv run depot-planner run saitama_all33 --capacity 3         # 1 台に機材 3 �
 uv run depot-planner run saitama_all33 --capacity 2 --max-deliveries 4   # 2 個ずつ、積み直して最大 4 か所
 uv run depot-planner run saitama_all33 --vehicles 10        # 車両の総数を 10 台に固定（0 で自動）
 uv run depot-planner run saitama_all33 --k 6 --no-routing   # 採用数だけ変えて選定のみ
+uv run depot-planner run saitama_all33 --capacity 3 --screen 12   # 一体計算で比べる組合せを 12 組に
+uv run depot-planner run saitama_all33 --capacity 3 --separate    # 選定 → ルートを分けて（従来方式）
 uv run depot-planner run scenarios/x.json --json --no-save  # 結果を JSON で標準出力
 uv run depot-planner search "利根川上流河川事務所 目吹"       # 地点検索（座標付き）
 uv run depot-planner add saitama_all33 --candidate "川越市役所" --group 公共施設

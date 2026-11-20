@@ -143,6 +143,9 @@ def to_docx(result, path):
           if result.get("preference") else []),
         f"探索: {'全組合せの総当たり（厳密解）' if s['method'] == 'exact' else '貪欲法＋入替え探索（近似解）'}"
         f"。組合せ数 {s['combinations']:,}。",
+        *([f"選定とルートの一体計算: 直行前提の上位 {len(ig['screened']) or 1} 組をルート最適化で比べ、"
+           "実際の所要時間が最も短い組を採用。各拠点の機材数もルートで実際に積んだ個数で決める。"]
+          if (ig := result.get("integration")) else []),
     ]:
         doc.add_paragraph(line, style="List Bullet")
 
@@ -168,8 +171,10 @@ def to_docx(result, path):
            fills=[fill_of[group_of[d["id"]]] for d in result["depots"]] + [TOTAL_FILL],
            widths=[116, 56, 40, 50, 56, 162])
     doc.add_paragraph(f"総所要 {s['total_min']} 分／目的地 1 件あたり平均 {s['avg_min']} 分"
-                      "（各目的地へ補給地点から直行する前提の値）。"
-                      f"拠点数を増やしても最長所要は {s['lower_bound_min']} 分を下回らない"
+                      + ("（ルート最適化後の値。同じ拠点から各目的地へ直行した場合の最長は"
+                         f" {s['direct_makespan_min']} 分）。" if s.get("integrated") else
+                         "（各目的地へ補給地点から直行する前提の値）。")
+                      + f"拠点数を増やしても直行で最長所要は {s['lower_bound_min']} 分を下回らない"
                       f"（{s['bottleneck_target']} が最寄りの補給地点からも遠いため）。")
 
     doc.add_heading("3. 採用拠点の所在地・メモ", level=1)
@@ -179,13 +184,30 @@ def to_docx(result, path):
            widths=[130, 170, 180])
 
     doc.add_heading("4. 目的地ごとの担当拠点（所要時間の遅い順）", level=1)
+    if s.get("integrated"):
+        doc.add_paragraph("担当拠点 = その目的地へ届けた機材を積んだ拠点。所要 = 配送（作業）完了時刻。移動 = 担当拠点から直行した場合の移動時間。")
     _table(doc, ["順位", "目的地", "担当拠点", "移動(分)", "所要(分)"],
            [[i, a["target"], a["depot"], a["travel_min"], a["time_min"]]
             for i, a in enumerate(result["assignments"], 1)],
            widths=[34, 120, 180, 60, 60])
 
+    ig = result.get("integration")
+    if ig and ig["screened"]:
+        doc.add_heading("4-2. ルートで比べた拠点の組合せ", level=1)
+        doc.add_paragraph(f"直行前提の上位 {len(ig['screened'])} 組を、それぞれ {ig['screen_time_sec']} 秒の"
+                          "ルート探索で比べた結果（★ が採用。採用した組は本計算でさらに探索）。")
+        _table(doc, ["直行順位", "直行 最長(分)", "ルート 最長(分)", "ルート 総所要(分)", "拠点"],
+               [[f"{r['rank']}{' ★' if r['chosen'] else ''}", r["direct_makespan_min"],
+                 "解なし" if r["route_makespan_min"] is None else r["route_makespan_min"],
+                 "-" if r["route_total_min"] is None else r["route_total_min"],
+                 " / ".join(r["depots"])] for r in ig["screened"]],
+               fills=[TOTAL_FILL if r["chosen"] else None for r in ig["screened"]],
+               widths=[44, 52, 52, 60, 272])
+    elif ig and ig.get("skipped"):
+        doc.add_paragraph(f"ルートでの組合せ比較は省略（{ig['skipped']}）。")
+
     if len(result["sensitivity"]) > 1:
-        doc.add_heading("5. 採用地点数を変えた場合（感度分析）", level=1)
+        doc.add_heading("5. 採用地点数を変えた場合（感度分析・直行前提）", level=1)
         _table(doc, ["拠点数", "最長所要(分)", "総所要(分)", "採用拠点（機材数）"],
                [[r["k"], r["makespan_min"], r["total_min"],
                  " / ".join(f"{d['name']}({d['stock']})" for d in r["depots"])]

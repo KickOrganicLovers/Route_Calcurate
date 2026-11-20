@@ -315,7 +315,7 @@ def test_runner_with_capacity(monkeypatch):
     res = runner.run_scenario(sc)
     rt = res["routing"]
     assert res["summary"]["num_vehicles"] == rt["num_vehicles"] == sum(d["vehicles"] for d in res["depots"])
-    assert all(d["vehicles"] == -(-d["stock"] // 2) for d in res["depots"])
+    assert sum(d["stock"] for d in res["depots"]) == len(sc["targets"])
     delivered = [st["id"] for v in rt["vehicles"] for st in v["stops"] if st["kind"] == "deliver"]
     assert sorted(delivered) == sorted(t["id"] for t in sc["targets"])
     assert all(v["deliveries"] <= 2 for v in rt["vehicles"])
@@ -351,3 +351,114 @@ def test_runner_with_fixed_fleet(monkeypatch):
     delivered = [st["id"] for v in rt["vehicles"] for st in v["stops"] if st["kind"] == "deliver"]
     assert sorted(delivered) == sorted(t["id"] for t in sc["targets"])
     assert "総数を指定" in runner.format_text(res)
+
+
+# ---------------------------------------------------------------------------
+# 選定とルートの一体計算
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("objective", solver.OBJECTIVES)
+def test_alternatives_are_top_subsets(cost, objective):
+    r = solver.solve(cost, 3, objective=objective, top=6)
+    alts = r["alternatives"]
+    assert alts[0] == r["subset"] and len(alts) == 6
+    assert len({tuple(sorted(a)) for a in alts}) == 6
+    keys = [solver._key(cost, a, objective) for a in alts]
+    every = sorted(solver._key(cost, list(s), objective) for s in combinations(range(12), 3))
+    assert keys == pytest.approx(every[:6])           # 総当たりの上位 6 件と一致
+
+
+def test_alternatives_heuristic_and_preference(cost):
+    r = solver.solve(cost, 4, max_exact=1, top=5)
+    assert r["alternatives"][0] == r["subset"] and len(r["alternatives"]) == 5
+    r = solver.solve(cost, 4, preferred=[0], avoid=[1], margin=5, top=4)
+    assert r["alternatives"][0] == r["subset"]
+    assert solver.solve(cost, 4)["alternatives"] == [solver.solve(cost, 4)["subset"]]
+
+
+def _line_case():
+    """直行では A 組が最良だが、積載 3 で回ると B 組のほうが速くなる配置。"""
+    # 候補 0..3 と目的地 0..5 を数直線上に置く(移動時間 = 距離)
+    cpos = [0.0, 10.0, 4.0, 30.0]
+    tpos = [1.0, 2.0, 3.0, 9.0, 11.0, 29.0]
+    pts = cpos + tpos
+    tmat = np.abs(np.subtract.outer(pts, pts))
+    cost = tmat[:4, 4:] + 1.0
+    return tmat, cost
+
+
+def test_integrated_plan_picks_best_route():
+    from depot_planner import integrated as itg
+    tmat, cost = _line_case()
+    alts = solver.solve(cost, 2, top=6)["alternatives"]
+    res = itg.plan(tmat, cost, alts, capacity=3, service_min=1, reload_min=0,
+                   time_limit_sec=1, screen_time_sec=1)
+    assert res["skipped"] is None and len(res["screened"]) == len(alts)
+    best = min(r["route_makespan"] for r in res["screened"])
+    assert res["route"]["makespan"] <= best + 1e-9
+    assert res["subset"] == res["screened"][res["chosen_rank"] - 1]["subset"]
+    # どの目的地にもちょうど 1 回届き、積載量を守る
+    _check_routes(res["route"], [6] * 2, 6, 3, 3)
+
+
+def test_integrated_plan_skips_when_direct_equivalent():
+    from depot_planner import integrated as itg
+    tmat, cost = _line_case()
+    alts = solver.solve(cost, 2, top=6)["alternatives"]
+    res = itg.plan(tmat, cost, alts, capacity=1, time_limit_sec=1)
+    assert res["skipped"] and res["screened"] == [] and res["subset"] == alts[0]
+    assert itg.is_direct_equivalent(1, None, None, 6)
+    assert not itg.is_direct_equivalent(1, None, 3, 6)
+    assert not itg.is_direct_equivalent(2, None, None, 6)
+
+
+@pytest.mark.parametrize("routing_kw", [dict(vehicle_capacity=2), dict(vehicle_capacity=1, num_vehicles=2),
+                                        dict(vehicle_capacity=1)])
+def test_runner_integrated(monkeypatch, routing_kw):
+    monkeypatch.setattr(runner, "build_matrix", _fake_matrix)
+    sc = _scenario()
+    sc["params"]["routing"].update(screen_candidates=3, screen_time_sec=1, **routing_kw)
+    res = runner.run_scenario(sc)
+    rt, s, ig = res["routing"], res["summary"], res["integration"]
+    assert s["integrated"] and rt["integrated"] and ig is not None
+    assert s["makespan_min"] == rt["makespan_min"]
+    assert s["direct_makespan_min"] <= s["makespan_min"] + 1e-9   # 直行は下界
+    # 機材数 = 実際に積んだ個数、担当 = 積んだ拠点
+    picked = {}
+    for v in rt["vehicles"]:
+        for st in v["stops"]:
+            if st["kind"] == "pickup":
+                picked[st["id"]] = picked.get(st["id"], 0) + st["count"]
+    assert {d["id"]: d["stock"] for d in res["depots"] if d["stock"]} == picked
+    assert sum(d["stock"] for d in res["depots"]) == s["num_targets"]
+    assert sum(d["vehicles"] for d in res["depots"]) == rt["num_vehicles"] == s["num_vehicles"]
+    assert max(a["time_min"] for a in res["assignments"]) == pytest.approx(rt["makespan_min"])
+    text = runner.format_text(res)
+    assert "一体" in text
+
+
+def test_runner_separate_mode(monkeypatch):
+    monkeypatch.setattr(runner, "build_matrix", _fake_matrix)
+    sc = _scenario()
+    sc["params"]["routing"].update(vehicle_capacity=2, integrated=False)
+    res = runner.run_scenario(sc)
+    assert res["integration"] is None and not res["summary"]["integrated"]
+    assert res["summary"]["makespan_min"] == res["summary"]["direct_makespan_min"]
+    assert all(d["vehicles"] == -(-d["stock"] // 2) for d in res["depots"])
+
+
+def test_docx_with_integration(monkeypatch, tmp_path):
+    from depot_planner import report
+    monkeypatch.setattr(runner, "build_matrix", _fake_matrix)
+    sc = _scenario()
+    sc["params"]["routing"].update(vehicle_capacity=2, screen_candidates=3, screen_time_sec=1)
+    res = runner.run_scenario(sc)
+    report.save_all(res, tmp_path)
+    assert (tmp_path / "report.docx").stat().st_size > 0
+
+
+def test_validate_integrated():
+    sc = _scenario()
+    sc["params"]["routing"].update(screen_candidates=0)
+    assert any("比べる組合せ" in e for e in scn.validate(sc))
+    sc["params"]["routing"].update(screen_candidates=4, screen_time_sec=0)
+    assert any("比較時の探索時間" in e for e in scn.validate(sc))

@@ -24,6 +24,11 @@
 探索:
     組合せ数が max_exact 以下なら numpy で全組合せを総当たり(厳密解)。
     超える場合は 貪欲法 + 入替え局所探索(近似解)。
+
+上位の組合せ(top):
+    top >= 2 なら、選んだ組合せに加えて「次点」の組合せも alternatives として返す。
+    選定とルート最適化を一体で解くとき(integrated.py)、これらを実際のルートで比べ直す。
+    厳密解では全組合せの上位、近似解では最終解の 1 対 1 入替え近傍の上位。
 """
 
 import math
@@ -68,20 +73,66 @@ def _pref_counts(cost, subset, weight):
 
 
 def _pick(classes, margin):
-    """{(-優先数, 避ける数): (key, subset)} から許容幅内で最も好ましいものを選ぶ。"""
-    best = min(v[0][0] for v in classes.values())
-    ok = [(c, v) for c, v in classes.items() if v[0][0] <= best + margin + 1e-9]
+    """{(-優先数, 避ける数): [(key, subset), ...]} から許容幅内で最も好ましいものを選ぶ。"""
+    best = min(v[0][0][0] for v in classes.values())
+    ok = [(c, v[0]) for c, v in classes.items() if v[0][0][0] <= best + margin + 1e-9]
     c, (key, subset) = min(ok, key=lambda cv: (cv[0], cv[1][0]))
     return subset, best
 
 
-def _exact(cost, pool, required, r, objective, progress, cancel, n_comb, weight, margin):
+def _merge_alternatives(chosen, ranked_lists, top):
+    """chosen を先頭に、各リストから交互に重複なく top 件まで取る。"""
+    out, seen = [list(chosen)], {tuple(sorted(chosen))}
+    iters = [iter(r) for r in ranked_lists]
+    while len(out) < top and iters:
+        for it in list(iters):
+            for sub in it:
+                key = tuple(sorted(sub))
+                if key not in seen:
+                    seen.add(key)
+                    out.append(list(sub))
+                    break
+            else:
+                iters.remove(it)
+            if len(out) >= top:
+                break
+    return out
+
+
+def _alternatives_exact(classes, chosen, margin, top):
+    best = min(v[0][0][0] for v in classes.values())
+    flat = [(c, key, sub) for c, v in classes.items() for key, sub in v]
+    plain = [sub for _, _, sub in sorted(flat, key=lambda x: x[1])]
+    pref = [sub for _, _, sub in sorted((x for x in flat if x[1][0] <= best + margin + 1e-9),
+                                        key=lambda x: (x[0], x[1]))]
+    return _merge_alternatives(chosen, [pref, plain], top)
+
+
+def _alternatives_neighbors(cost, chosen, pool, required, objective, top, weight, margin, best):
+    """最終解の 1 対 1 入替え近傍から上位を取る(近似解のとき)。"""
+    rows = []
+    for pos in range(len(required), len(chosen)):
+        for u in pool:
+            if u in chosen:
+                continue
+            trial = chosen[:pos] + [u] + chosen[pos + 1:]
+            k = _key(cost, trial, objective)
+            if weight is not None:
+                p, a = _pref_counts(cost, trial, weight)
+                rows.append(((k[0] > best + margin + 1e-9, -p, a) + k, trial))
+            else:
+                rows.append((k, trial))
+    rows.sort(key=lambda r: r[0])
+    return _merge_alternatives(chosen, [[t for _, t in rows]], top)
+
+
+def _exact(cost, pool, required, r, objective, progress, cancel, n_comb, weight, margin, top=1):
     req = np.asarray(required, dtype=int)
     if r == 0:
-        return list(required), 1, None
+        return list(required), 1, None, [list(required)]
     pool_arr = np.asarray(pool)
     use_w = weight is not None
-    classes = {}     # (-優先数, 避ける数) → (key, subset)。重みが無ければ (0, 0) の 1 クラスだけ
+    classes = {}     # (-優先数, 避ける数) → [(key, subset)] 上位 top 件。重みが無ければ (0, 0) の 1 クラスだけ
     it = combinations(range(len(pool)), r)
     done = 0
     n_t = cost.shape[1]
@@ -110,16 +161,18 @@ def _exact(cost, pool, required, r, objective, progress, cancel, n_comb, weight,
             cls = np.zeros((len(idx), 2), dtype=int)
         for c in np.unique(cls, axis=0):
             mask = np.where((cls == c).all(axis=1))[0]
-            o = mask[np.lexsort((secondary[mask], primary[mask]))[0]]
-            key = (float(primary[o]), float(secondary[o]))
             ck = (int(c[0]), int(c[1]))
-            if ck not in classes or key < classes[ck][0]:
-                classes[ck] = (key, [int(x) for x in idx[o]])
+            rows = classes.get(ck, [])
+            for o in mask[np.lexsort((secondary[mask], primary[mask]))[:top]]:
+                rows.append(((float(primary[o]), float(secondary[o])), [int(x) for x in idx[o]]))
+            rows.sort(key=lambda kv: kv[0])
+            classes[ck] = rows[:top]
         done += len(chunk)
         if progress:
             progress(done / n_comb, f"全組合せを探索中 {done:,}/{n_comb:,}")
     subset, best = _pick(classes, margin if use_w else 0.0)
-    return subset, done, best
+    alts = _alternatives_exact(classes, subset, margin if use_w else 0.0, top) if top > 1 else [subset]
+    return subset, done, best, alts
 
 
 def _heuristic_weighted(cost, pool, required, r, objective, progress, cancel, weight, margin):
@@ -208,7 +261,7 @@ def _heuristic(cost, pool, required, r, objective, progress, cancel):
 
 def solve(cost, k, allowed=None, required=(), objective="makespan",
           max_exact=5_000_000, progress=None, cancel=None,
-          preferred=(), avoid=(), margin=10.0):
+          preferred=(), avoid=(), margin=10.0, top=1):
     """候補から k 拠点を選ぶ。
 
     cost      : (n_candidates, n_targets) の numpy 配列 [分]
@@ -217,8 +270,10 @@ def solve(cost, k, allowed=None, required=(), objective="makespan",
     preferred : 優先して採用する候補 index
     avoid     : なるべく採用しない候補 index
     margin    : 優先 / なるべく避けるのために許す、目的関数(主たる値)の悪化幅[分]
+    top       : alternatives に返す組合せの数(先頭は subset と同じ)
     戻り値    : dict(subset, owner, times, makespan, total, method, evaluated, combinations,
-                     best_primary … 優先などを無視したときの最良値)
+                     best_primary … 優先などを無視したときの最良値,
+                     alternatives … 上位の組合せ [subset, 次点, ...])
     """
     if objective not in OBJECTIVES:
         raise ValueError(f"objective は {OBJECTIVES} のいずれか: {objective}")
@@ -241,16 +296,22 @@ def solve(cost, k, allowed=None, required=(), objective="makespan",
 
     n_comb = math.comb(len(pool), r)
     if n_comb <= max_exact:
-        subset, evaluated, best = _exact(cost, pool, required, r, objective, progress, cancel,
-                                         n_comb, weight, margin)
+        subset, evaluated, best, alts = _exact(cost, pool, required, r, objective, progress,
+                                               cancel, n_comb, weight, margin, max(int(top), 1))
         method = "exact"
-    elif weight is not None:
-        subset, evaluated, best = _heuristic_weighted(cost, pool, required, r, objective,
-                                                      progress, cancel, weight, margin)
-        method = "heuristic"
     else:
-        subset, evaluated = _heuristic(cost, pool, required, r, objective, progress, cancel)
-        best, method = None, "heuristic"
+        if weight is not None:
+            subset, evaluated, best = _heuristic_weighted(cost, pool, required, r, objective,
+                                                          progress, cancel, weight, margin)
+        else:
+            subset, evaluated = _heuristic(cost, pool, required, r, objective, progress, cancel)
+            best = None
+        method = "heuristic"
+        alts = [list(subset)]
+        if top > 1:
+            ref = _key(cost, subset, objective)[0] if best is None else best
+            alts = _alternatives_neighbors(cost, list(subset), pool, required, objective, int(top),
+                                           weight, margin, ref)
     mk, tot, owner, times = evaluate(cost, subset)
     primary = mk if objective == "makespan" else tot
     n_pref, n_avoid = _pref_counts(cost, subset, weight) if weight is not None else (0, 0)
@@ -258,4 +319,5 @@ def solve(cost, k, allowed=None, required=(), objective="makespan",
             "times": times.tolist(), "makespan": mk, "total": tot,
             "method": method, "evaluated": int(evaluated), "combinations": n_comb,
             "best_primary": primary if best is None else float(best),
-            "num_preferred": n_pref, "num_avoided": n_avoid}
+            "num_preferred": n_pref, "num_avoided": n_avoid,
+            "alternatives": [[int(i) for i in a] for a in alts]}
